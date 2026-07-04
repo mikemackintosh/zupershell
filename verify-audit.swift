@@ -2,11 +2,11 @@
 import Foundation
 import CryptoKit
 
-// Verify a myterm audit log: recompute each record's HMAC and check the
+// Verify a zupershell audit log: recompute each record's HMAC and check the
 // prev→hmac hash chain. Uses the same JSONSerialization(.sortedKeys)
 // canonicalization as the writer, so the bytes match exactly.
 //
-//   swift verify-audit.swift ~/.myterm/audit-<session>.jsonl
+//   swift verify-audit.swift ~/.zupershell/audit-<session>.jsonl
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
@@ -14,7 +14,7 @@ guard args.count >= 2 else {
     exit(2)
 }
 
-let keyURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".myterm/audit.key")
+let keyURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zush/audit.key")
 guard let keyData = try? Data(contentsOf: keyURL), keyData.count == 32 else {
     print("✗ cannot read key at \(keyURL.path)"); exit(1)
 }

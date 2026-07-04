@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# bundle.sh — build myterm.app (reproducible, deterministic).
+# bundle.sh — build Zupershell.app (reproducible, deterministic).
 #
 # Steps:
 #   1. Compile a release binary with SwiftPM.
-#   2. Assemble the macOS .app layout:  myterm.app/Contents/{MacOS,Resources}
+#   2. Assemble the macOS .app layout:  Zupershell.app/Contents/{MacOS,Resources}
 #   3. Write Info.plist.
-#   4. Copy the shell-integration.zsh into Resources for reference.
+#   4. Copy shell-integration.zsh into Resources for reference.
 #   5. Ad-hoc codesign (signature "-") so Gatekeeper lets us open it locally
 #      without a Developer ID. Not distributable; fine for personal use.
 #
-# Output: ./myterm.app in the project root.
+# Output: ./Zupershell.app in the project root.
 # Run:    ./bundle.sh          → build + assemble
 #         ./bundle.sh --run    → also open the app when done
 # ─────────────────────────────────────────────────────────────────────────────
@@ -18,10 +18,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-BUNDLE_ID="io.zyp.myterm"
-APP_NAME="myterm"
+BUNDLE_ID="io.zyp.zupershell"
+EXEC_NAME="zupershell"
+DISPLAY_NAME="Zupershell"
 VERSION="0.1.0"
-APP="${APP_NAME}.app"
+APP="${DISPLAY_NAME}.app"
 
 echo "▸ compiling release binary…"
 swift build -c release
@@ -30,8 +31,8 @@ echo "▸ assembling ${APP}…"
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
-cp ".build/release/${APP_NAME}" "${APP}/Contents/MacOS/${APP_NAME}"
-cp "shell-integration.zsh"      "${APP}/Contents/Resources/shell-integration.zsh"
+cp ".build/release/${EXEC_NAME}" "${APP}/Contents/MacOS/${EXEC_NAME}"
+cp "shell-integration.zsh"       "${APP}/Contents/Resources/shell-integration.zsh"
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,9 +40,9 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>            <string>${BUNDLE_ID}</string>
-    <key>CFBundleName</key>                  <string>${APP_NAME}</string>
-    <key>CFBundleDisplayName</key>           <string>${APP_NAME}</string>
-    <key>CFBundleExecutable</key>            <string>${APP_NAME}</string>
+    <key>CFBundleName</key>                  <string>${DISPLAY_NAME}</string>
+    <key>CFBundleDisplayName</key>           <string>${DISPLAY_NAME}</string>
+    <key>CFBundleExecutable</key>            <string>${EXEC_NAME}</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
     <key>CFBundleVersion</key>               <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>    <string>${VERSION}</string>

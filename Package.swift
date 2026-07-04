@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "myterm",
+    name: "zupershell",
     platforms: [.macOS(.v13)],
     dependencies: [
         // Miguel de Icaza's terminal core: VT parser + grid + a drawable NSView.
@@ -11,7 +11,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "myterm",
+            name: "zupershell",
             dependencies: ["SwiftTerm"]
         )
     ],

@@ -9,6 +9,8 @@ xcuserdata/
 DerivedData/
 
 # The built .app is a reproducible artifact — build it with ./bundle.sh
+Zupershell.app/
+# Legacy pre-rename artifact
 myterm.app/
 
 # macOS crumbs

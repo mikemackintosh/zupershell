@@ -2,7 +2,7 @@ import AppKit
 import SwiftTerm
 
 // ─────────────────────────────────────────────────────────────────────────────
-// myterm — a minimal macOS terminal emulator with a built-in audit/security tap.
+// zupershell — a minimal macOS terminal emulator with a built-in audit/security tap.
 //
 // SwiftTerm gives us the VT core (parser, grid, renderer, PTY). On top of it we
 // install sensors: OSC 52 (clipboard) and OSC 133 (command marks) via the
@@ -47,16 +47,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         //   • TERM / COLORTERM  — advertise 256-color + truecolor
         //   • POWERLEVEL9K_TERM_SHELL_INTEGRATION=true — make p10k emit OSC 133
         //     command marks, so the audit tap captures command_start/end + exit
-        //   • TERM_PROGRAM=myterm — identify ourselves
+        //   • TERM_PROGRAM=zupershell — identify ourselves
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = (shell as NSString).lastPathComponent
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["POWERLEVEL9K_TERM_SHELL_INTEGRATION"] = "true"
-        env["TERM_PROGRAM"] = "myterm"
+        env["TERM_PROGRAM"] = "zupershell"
         let envArray = env.map { "\($0.key)=\($0.value)" }
-        audit.log("session_start", ["shell": shell, "emulator": "myterm"])
+        audit.log("session_start", ["shell": shell, "emulator": "zupershell"])
         terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
 
         window = NSWindow(
@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
             backing: .buffered,
             defer: false
         )
-        window.title = "myterm"
+        window.title = "zupershell"
         // Unified, transparent titlebar so it blends into the terminal background
         // (iTerm/Ghostty-style). Matches SwiftTerm's default black bg.
         window.titlebarAppearsTransparent = true
@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         window.makeFirstResponder(terminal)
         NSApp.activate(ignoringOtherApps: true)
 
-        FileHandle.standardError.write("myterm audit log: \(audit.path)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("zupershell audit log: \(audit.path)\n".data(using: .utf8)!)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 
     /// OSC 133 payload = phase char, optionally ";<extra>":
     ///   • "D;<exit>"       — command finished with that exit code
-    ///   • "C;<base64-cmd>" — myterm extension: the command text as typed
+    ///   • "C;<base64-cmd>" — zupershell extension: the command text as typed
     ///     (base64 so control chars in the command can't break OSC parsing).
     private func handleOSC133(_ bytes: [UInt8]) {
         let s = String(decoding: bytes, as: UTF8.self)
@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        window.title = title.isEmpty ? "myterm" : title
+        window.title = title.isEmpty ? "zupershell" : title
         audit.log("title", ["title": title])
     }
 
@@ -176,12 +176,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 // Lets us validate the writer + verifier without driving a window.
 if CommandLine.arguments.contains("--audit-selftest") {
     let a = AuditLog.shared
-    a.log("session_start", ["shell": "/bin/zsh", "emulator": "myterm"])
+    a.log("session_start", ["shell": "/bin/zsh", "emulator": "zupershell"])
     a.log("osc133", ["phase": "A", "name": "prompt_start"])
     a.log("clipboard_write", ["targets": "c", "bytes": 11,
                               "sha256": sha256hex(Data("hello world".utf8)),
                               "preview": "hello world", "policy": "allowed"])
-    a.log("cwd", ["dir": "/Users/duppster/src/myterm"])   // slashes exercise \/ escaping
+    a.log("cwd", ["dir": "/Users/duppster/src/zupershell"])   // slashes exercise \/ escaping
     a.log("osc133", ["phase": "D", "name": "command_end", "exit": 0])
     a.log("process_exit", ["code": 0])
     a.flush()
@@ -197,7 +197,7 @@ let mainMenu = NSMenu()
 let appMenuItem = NSMenuItem()
 mainMenu.addItem(appMenuItem)
 let appMenu = NSMenu()
-appMenu.addItem(withTitle: "Quit myterm",
+appMenu.addItem(withTitle: "Quit zupershell",
                 action: #selector(NSApplication.terminate(_:)),
                 keyEquivalent: "q")
 appMenuItem.submenu = appMenu

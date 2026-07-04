@@ -1,4 +1,4 @@
-# myterm
+# zupershell (zush)
 
 A macOS terminal emulator with a **built-in, tamper-evident audit tap** — native
 EDR-from-inside-the-terminal for Claude Code and other AI coding agents.
@@ -16,32 +16,33 @@ EDR-from-inside-the-terminal for Claude Code and other AI coding agents.
 ```sh
 swift build              # debug
 swift run                # debug + launch
-./bundle.sh              # release .app in ./myterm.app
+./bundle.sh              # release .app in ./Zupershell.app
 ./bundle.sh --run        # + open it
 ```
 
 ## Shell integration (recommended)
 
 Sources OSC 133 command marks + OSC 7 cwd from any shell — no p10k / starship
-dependency. Self-gates on `TERM_PROGRAM=myterm`, so it's inert everywhere else.
+dependency. Self-gates on `TERM_PROGRAM=zupershell`, so it's inert everywhere
+else.
 
 ```sh
 # ~/.zshrc
-[[ -f ~/src/myterm/shell-integration.zsh ]] && source ~/src/myterm/shell-integration.zsh
+[[ -f ~/src/zupershell/shell-integration.zsh ]] && source ~/src/zupershell/shell-integration.zsh
 ```
 
 ## Audit log
 
-- Location: `~/.myterm/audit-<session>.jsonl`
-- HMAC key: `~/.myterm/audit.key` (0600, per-machine)
-- Verify a log: `swift verify-audit.swift ~/.myterm/audit-*.jsonl`
-- Live tail:   `tail -f ~/.myterm/audit-*.jsonl | jq -c '{type,cmd,exit,dir,preview}'`
+- Location: `~/.zush/audit-<session>.jsonl`
+- HMAC key: `~/.zush/audit.key` (0600, per-machine)
+- Verify a log: `swift verify-audit.swift ~/.zush/audit-*.jsonl`
+- Live tail:   `tail -f ~/.zush/audit-*.jsonl | jq -c '{type,cmd,exit,dir,preview}'`
 
 ## Layout
 
 ```
 Package.swift                   SwiftTerm dependency
-Sources/myterm/
+Sources/zupershell/
     main.swift                  window, PTY, sensors, policy
     AuditLog.swift              HMAC hash-chained JSONL writer
 verify-audit.swift              chain verifier (independent script)

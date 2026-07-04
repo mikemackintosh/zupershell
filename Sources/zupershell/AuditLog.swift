@@ -25,7 +25,7 @@ final class AuditLog {
 
     private var seq = 0
     private var prevMac = "genesis"
-    private let q = DispatchQueue(label: "myterm.audit")
+    private let q = DispatchQueue(label: "zupershell.audit")
     private let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -34,7 +34,7 @@ final class AuditLog {
 
     private init() {
         let fm = FileManager.default
-        let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".myterm")
+        let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".zush")
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
         // Per-machine HMAC key, 0600. A real build would put this in the Keychain.
