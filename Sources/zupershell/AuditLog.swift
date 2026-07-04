@@ -10,15 +10,35 @@ import CryptoKit
 // so deleting or editing any line breaks the chain from that point forward.
 // This mirrors the Cowork signed-audit.jsonl pattern (see cowatch notes).
 //
-// Because we ARE the terminal, this sensor sees 100% of the in-band traffic with
-// no PTY tap — and, for OSC 52, it also owns the real clipboard effect (the seam
-// a PTY-only sensor couldn't cover; cf. Part IV.5 of the capabilities doc).
+// Because we ARE the terminal, this sensor sees 100% of the in-band traffic
+// with no PTY tap — and, for OSC 52, it also owns the real clipboard effect
+// (the seam a PTY-only sensor couldn't cover; cf. Part IV.5 of the doc).
+//
+// One instance per window/session. All instances share a single per-machine
+// HMAC key on disk so any log can be verified independently.
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class AuditLog {
-    static let shared = AuditLog()
+    /// Per-machine HMAC key. Loaded once (thread-safe: `static let`), then
+    /// reused by every AuditLog instance so a verifier only needs this one
+    /// file to check any session log this machine has ever produced.
+    /// Persisted at ~/.zush/audit.key (0600). A hardened build would move
+    /// this to the Keychain.
+    private static let key: SymmetricKey = {
+        let fm = FileManager.default
+        let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".zush")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let keyURL = dir.appendingPathComponent("audit.key")
+        if let d = try? Data(contentsOf: keyURL), d.count == 32 {
+            return SymmetricKey(data: d)
+        }
+        let k = SymmetricKey(size: .bits256)
+        let kd = k.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
+        try? kd.write(to: keyURL, options: [.atomic])
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyURL.path)
+        return k
+    }()
 
-    private let key: SymmetricKey
     private let handle: FileHandle?
     let sessionID: String
     let path: String
@@ -32,27 +52,19 @@ final class AuditLog {
         return f
     }()
 
-    private init() {
+    /// Create a fresh audit log for a new session. Session ID = ISO8601
+    /// timestamp + pid + 8-char UUID, so two windows opened in the same
+    /// second still get distinct filenames.
+    init() {
         let fm = FileManager.default
         let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".zush")
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Per-machine HMAC key, 0600. A real build would put this in the Keychain.
-        let keyURL = dir.appendingPathComponent("audit.key")
-        if let d = try? Data(contentsOf: keyURL), d.count == 32 {
-            key = SymmetricKey(data: d)
-        } else {
-            let k = SymmetricKey(size: .bits256)
-            let kd = k.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
-            try? kd.write(to: keyURL, options: [.atomic])
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyURL.path)
-            key = k
-        }
-
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "")
             .replacingOccurrences(of: "-", with: "")
-        sessionID = "\(stamp)-\(ProcessInfo.processInfo.processIdentifier)"
+        let shortUUID = String(UUID().uuidString.prefix(8))
+        sessionID = "\(stamp)-\(ProcessInfo.processInfo.processIdentifier)-\(shortUUID)"
 
         let logURL = dir.appendingPathComponent("audit-\(sessionID).jsonl")
         path = logURL.path
@@ -77,10 +89,10 @@ final class AuditLog {
             ]
             fields.forEach { rec[$0.key] = $0.value }
 
-            // Canonical form (sorted keys) BEFORE adding hmac, so a verifier can
-            // recompute it by stripping the hmac field and re-serializing sorted.
+            // Canonical form (sorted keys) BEFORE adding hmac, so a verifier
+            // can recompute it by stripping hmac and re-serializing sorted.
             let canon = (try? JSONSerialization.data(withJSONObject: rec, options: [.sortedKeys])) ?? Data()
-            let macHex = HMAC<SHA256>.authenticationCode(for: canon, using: self.key)
+            let macHex = HMAC<SHA256>.authenticationCode(for: canon, using: Self.key)
                 .map { String(format: "%02x", $0) }.joined()
             rec["hmac"] = macHex
             self.prevMac = macHex

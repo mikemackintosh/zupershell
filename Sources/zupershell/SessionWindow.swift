@@ -1,0 +1,206 @@
+import AppKit
+import SwiftTerm
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SessionWindow — one window, one terminal, one audit log.
+//
+// Extracted from AppDelegate so multiple windows can coexist. Each window is
+// its own security session: distinct sessionID, its own JSONL log, its own
+// PTY child. Settings are app-wide (shared through SettingsStore) so a theme
+// change fans out to every open window via the .zushSettingsChanged noti.
+// ─────────────────────────────────────────────────────────────────────────────
+
+final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowDelegate {
+    let window: NSWindow
+    let terminal: LocalProcessTerminalView
+    let audit: AuditLog
+    private let store = SettingsStore.shared
+    private weak var coordinator: AppDelegate?
+    private var settingsObserver: NSObjectProtocol?
+
+    init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
+        self.coordinator = coordinator
+        self.audit = AuditLog()
+
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
+        self.terminal = LocalProcessTerminalView(frame: frame)
+        self.window = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered, defer: false)
+
+        super.init()
+
+        terminal.processDelegate = self
+        window.delegate = self
+        window.title = "zupershell"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .visible
+        window.backgroundColor = Themes.byName(store.current.themeName).background
+
+        // Only the FIRST window drives frame autosave; further windows cascade
+        // from the current key window so you don't get a stack of overlapped
+        // windows on the same pixel.
+        if isFirst && store.current.rememberWindowFrame {
+            window.setFrameAutosaveName("io.zyp.zupershell.mainWindow")
+        }
+
+        // Install sensors on the underlying Terminal.
+        let term = terminal.getTerminal()
+        term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
+        term.registerOscHandler(code: 133) { [weak self] d in self?.handleOSC133(Array(d)) }
+        term.options.scrollback = store.current.scrollbackLines
+        term.setup(isReset: false)
+
+        applyLiveSettings(store.current)
+
+        // Fan-out settings changes to this window for its lifetime.
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .zushSettingsChanged, object: nil, queue: .main
+        ) { [weak self] n in
+            guard let self, let s = n.object as? Settings else { return }
+            self.applyLiveSettings(s)
+        }
+
+        // Spawn the login shell.
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellName = (shell as NSString).lastPathComponent
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["POWERLEVEL9K_TERM_SHELL_INTEGRATION"] = "true"
+        env["TERM_PROGRAM"] = "zupershell"
+        let envArray = env.map { "\($0.key)=\($0.value)" }
+        audit.log("session_start", ["shell": shell, "emulator": "zupershell",
+                                    "theme": store.current.themeName,
+                                    "scrollback": store.current.scrollbackLines,
+                                    "windowIndex": isFirst ? 0 : 1])
+        terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
+
+        // Autoresizing container so the terminal fills the window and reflows
+        // on resize; 4pt vertical inset so the last row doesn't clip.
+        let container = NSView(frame: frame)
+        container.autoresizingMask = [.width, .height]
+        terminal.frame = container.bounds.insetBy(dx: 0, dy: 4)
+        terminal.autoresizingMask = [.width, .height]
+        container.addSubview(terminal)
+        window.contentView = container
+
+        // Context menu — same JSON that powers the menubar.
+        let spec = MenuLoader.load()
+        terminal.menu = MenuBuilder.buildPopup(spec, target: coordinator,
+                                               selector: #selector(AppDelegate.dispatchMenuAction(_:)))
+
+        window.makeKeyAndOrderFront(nil)
+        if isFirst {
+            if !store.current.rememberWindowFrame { window.center() }
+        } else if let prev = previousKey {
+            window.cascadeTopLeft(from: NSPoint(x: prev.frame.minX, y: prev.frame.maxY))
+        } else {
+            window.center()
+        }
+        window.makeFirstResponder(terminal)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    deinit {
+        if let obs = settingsObserver { NotificationCenter.default.removeObserver(obs) }
+    }
+
+    // MARK: - Actions the coordinator dispatches to a specific session
+
+    func clearBuffer()  { terminal.feed(text: "\u{1B}c") }
+    func resetTerminal() { terminal.getTerminal().resetToInitialState() }
+
+    // MARK: - Apply settings
+
+    /// Push font/palette/cursor/bg/alpha from Settings into this window. Called
+    /// at init and on every settings save (fanned out by NotificationCenter).
+    func applyLiveSettings(_ s: Settings) {
+        let theme = Themes.byName(s.themeName)
+        terminal.font = s.nsFont()
+        terminal.useBrightColors = s.useBrightColors
+        terminal.installColors(theme.swiftTermPalette)
+        terminal.nativeBackgroundColor = theme.background
+        terminal.nativeForegroundColor = theme.foreground
+        terminal.caretColor = theme.cursor
+        terminal.getTerminal().setCursorStyle(s.swiftTermCursor)
+        window.backgroundColor = theme.background
+        window.alphaValue = CGFloat(max(0.5, min(1.0, s.windowOpacity)))
+    }
+
+    // MARK: - Sensors
+
+    private func handleOSC52(_ bytes: [UInt8]) {
+        let s = String(decoding: bytes, as: UTF8.self)
+        let parts = s.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        let targets = parts.first.map(String.init) ?? ""
+        let payload = parts.count > 1 ? String(parts[1]) : ""
+
+        if payload == "?" {
+            audit.log("clipboard_read_attempt", ["targets": targets, "policy": "denied"])
+            return
+        }
+        guard let content = Data(base64Encoded: payload) else {
+            audit.log("clipboard_write", ["targets": targets, "policy": "rejected", "reason": "bad_base64"])
+            return
+        }
+        let text = String(decoding: content, as: UTF8.self)
+        let preview = String(text.prefix(80)).replacingOccurrences(of: "\n", with: "\\n")
+        let allowed = store.current.clipboardWriteAllowed
+
+        audit.log("clipboard_write", [
+            "targets": targets,
+            "bytes": content.count,
+            "sha256": sha256hex(content),
+            "preview": preview,
+            "policy": allowed ? "allowed" : "denied",
+        ])
+        guard allowed else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    private func handleOSC133(_ bytes: [UInt8]) {
+        let s = String(decoding: bytes, as: UTF8.self)
+        let f = s.split(separator: ";", omittingEmptySubsequences: false)
+        let phase = f.first.map(String.init) ?? ""
+        let name = ["A": "prompt_start", "B": "command_start",
+                    "C": "output_start", "D": "command_end"][phase] ?? "mark_\(phase)"
+        var fields: [String: Any] = ["phase": phase, "name": name]
+        if phase == "D", f.count > 1 { fields["exit"] = Int(f[1]) ?? -1 }
+        if phase == "C", f.count > 1,
+           let data = Data(base64Encoded: String(f[1])),
+           let cmd = String(data: data, encoding: .utf8) {
+            fields["cmd"] = cmd
+            fields["sha256"] = sha256hex(data)
+        }
+        audit.log("osc133", fields)
+    }
+
+    // MARK: - LocalProcessTerminalViewDelegate
+
+    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
+        audit.log("resize", ["cols": newCols, "rows": newRows])
+    }
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        window.title = title.isEmpty ? "zupershell" : title
+        audit.log("title", ["title": title])
+    }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        audit.log("cwd", ["dir": directory ?? ""])
+    }
+    func processTerminated(source: TerminalView, exitCode: Int32?) {
+        audit.log("process_exit", ["code": exitCode.map { Int($0) } ?? -1])
+        window.close()   // triggers windowWillClose, which unregisters this session
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowWillClose(_ notification: Notification) {
+        audit.log("window_closed", [:])
+        audit.flush()
+        coordinator?.removeSession(self)
+    }
+}
