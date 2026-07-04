@@ -2,22 +2,20 @@ import AppKit
 import SwiftTerm
 
 // ─────────────────────────────────────────────────────────────────────────────
-// zupershell — a minimal macOS terminal emulator with a built-in audit/security tap.
+// zupershell — macOS terminal emulator with a built-in audit/security tap.
 //
 // SwiftTerm gives us the VT core (parser, grid, renderer, PTY). On top of it we
 // install sensors: OSC 52 (clipboard) and OSC 133 (command marks) via the
 // Terminal's registerOscHandler, plus title / cwd / process events via the
 // delegate. Everything lands in a signed JSONL feed (see AuditLog.swift).
+// User-tunable config lives in ~/.zush/settings.json (see Settings.swift).
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalViewDelegate {
     var window: NSWindow!
     var terminal: LocalProcessTerminalView!
     let audit = AuditLog.shared
-
-    /// POLICY: flip to false to *block* programmatic clipboard writes (OSC 52).
-    /// Every attempt is logged either way. This is Part IV.3's defense-as-feature.
-    var clipboardWriteAllowed = true
+    let store = SettingsStore.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
@@ -27,27 +25,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 
         // ── Install sensors on the underlying Terminal ──────────────────────
         let term = terminal.getTerminal()
+        term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
+        term.registerOscHandler(code: 133) { [weak self] d in self?.handleOSC133(Array(d)) }
 
-        // OSC 52 — clipboard write/read. We now OWN this: log + policy + perform.
-        term.registerOscHandler(code: 52) { [weak self] data in
-            self?.handleOSC52(Array(data))
-        }
-        // OSC 133 — semantic command marks (prompt/command/output/exit).
-        term.registerOscHandler(code: 133) { [weak self] data in
-            self?.handleOSC133(Array(data))
-        }
+        // Apply scrollback BEFORE any output arrives (buffer rebuild is safe here
+        // since setup runs on a virgin terminal; live changes require a restart).
+        term.options.scrollback = store.current.scrollbackLines
+        term.setup(isReset: false)
 
-        // Nerd Font so Powerlevel10k / prompt glyphs render (no more tofu boxes).
-        if let f = NSFont(name: "Hack Nerd Font Mono", size: 13) {
-            terminal.font = f
+        // Apply all live-settable properties (font/colors/cursor) from settings.
+        applyLiveSettings(store.current)
+
+        // React to preference changes for as long as the app lives.
+        NotificationCenter.default.addObserver(forName: .zushSettingsChanged, object: nil, queue: .main) { [weak self] n in
+            guard let self, let s = n.object as? Settings else { return }
+            self.applyLiveSettings(s)
         }
 
         // Spawn the user's login shell (argv[0] = "-zsh"), inheriting the FULL
         // environment (startProcess replaces env, so we must copy it) plus:
         //   • TERM / COLORTERM  — advertise 256-color + truecolor
         //   • POWERLEVEL9K_TERM_SHELL_INTEGRATION=true — make p10k emit OSC 133
-        //     command marks, so the audit tap captures command_start/end + exit
-        //   • TERM_PROGRAM=zupershell — identify ourselves
+        //   • TERM_PROGRAM=zupershell — identify ourselves + gate shell integration
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = (shell as NSString).lastPathComponent
         var env = ProcessInfo.processInfo.environment
@@ -56,28 +55,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         env["POWERLEVEL9K_TERM_SHELL_INTEGRATION"] = "true"
         env["TERM_PROGRAM"] = "zupershell"
         let envArray = env.map { "\($0.key)=\($0.value)" }
-        audit.log("session_start", ["shell": shell, "emulator": "zupershell"])
+        audit.log("session_start", ["shell": shell, "emulator": "zupershell",
+                                    "theme": store.current.themeName,
+                                    "scrollback": store.current.scrollbackLines])
         terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
 
         window = NSWindow(
             contentRect: frame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
+            backing: .buffered, defer: false)
         window.title = "zupershell"
-        // Unified, transparent titlebar so it blends into the terminal background
-        // (iTerm/Ghostty-style). Matches SwiftTerm's default black bg.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
-        window.backgroundColor = .black
+        window.backgroundColor = Themes.byName(store.current.themeName).background
 
-        // Host the terminal in a container that autoresizes with the window.
-        // Fixes: (a) dead space above the view when the window grew, and
-        //        (b) the last row's cursor clipping against the bottom edge.
         let container = NSView(frame: frame)
         container.autoresizingMask = [.width, .height]
-        terminal.frame = container.bounds.insetBy(dx: 0, dy: 4) // 4pt bottom+top breathing room
+        terminal.frame = container.bounds.insetBy(dx: 0, dy: 4)
         terminal.autoresizingMask = [.width, .height]
         container.addSubview(terminal)
 
@@ -92,6 +86,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    // MARK: - Apply settings
+
+    /// Push font, palette, cursor, and window bg into the running terminal view.
+    /// Called at startup and on every settings save.
+    private func applyLiveSettings(_ s: Settings) {
+        let theme = Themes.byName(s.themeName)
+        terminal.font = s.nsFont()
+        terminal.useBrightColors = s.useBrightColors
+        terminal.installColors(theme.swiftTermPalette)
+        terminal.nativeBackgroundColor = theme.background
+        terminal.nativeForegroundColor = theme.foreground
+        terminal.caretColor = theme.cursor
+        terminal.getTerminal().setCursorStyle(s.swiftTermCursor)
+        window?.backgroundColor = theme.background
+    }
+
     // MARK: - Sensors
 
     /// OSC 52 payload = "<targets>;<base64 | ?>"
@@ -102,7 +112,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         let payload = parts.count > 1 ? String(parts[1]) : ""
 
         if payload == "?" {
-            // An app is trying to READ your clipboard — deny by default, always log.
             audit.log("clipboard_read_attempt", ["targets": targets, "policy": "denied"])
             return
         }
@@ -112,15 +121,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         }
         let text = String(decoding: content, as: UTF8.self)
         let preview = String(text.prefix(80)).replacingOccurrences(of: "\n", with: "\\n")
+        let allowed = store.current.clipboardWriteAllowed
 
         audit.log("clipboard_write", [
             "targets": targets,
             "bytes": content.count,
             "sha256": sha256hex(content),
             "preview": preview,
-            "policy": clipboardWriteAllowed ? "allowed" : "denied",
+            "policy": allowed ? "allowed" : "denied",
         ])
-        guard clipboardWriteAllowed else { return }
+        guard allowed else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
@@ -129,7 +139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
     /// OSC 133 payload = phase char, optionally ";<extra>":
     ///   • "D;<exit>"       — command finished with that exit code
     ///   • "C;<base64-cmd>" — zupershell extension: the command text as typed
-    ///     (base64 so control chars in the command can't break OSC parsing).
     private func handleOSC133(_ bytes: [UInt8]) {
         let s = String(decoding: bytes, as: UTF8.self)
         let f = s.split(separator: ";", omittingEmptySubsequences: false)
@@ -152,16 +161,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         audit.log("resize", ["cols": newCols, "rows": newRows])
     }
-
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         window.title = title.isEmpty ? "zupershell" : title
         audit.log("title", ["title": title])
     }
-
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         audit.log("cwd", ["dir": directory ?? ""])
     }
-
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         audit.log("process_exit", ["code": exitCode.map { Int($0) } ?? -1])
         NSApp.terminate(nil)
@@ -172,8 +178,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 // Bootstrap (SPM executable, no .xib).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Headless self-test: write a representative signed log and exit (no GUI).
-// Lets us validate the writer + verifier without driving a window.
 if CommandLine.arguments.contains("--audit-selftest") {
     let a = AuditLog.shared
     a.log("session_start", ["shell": "/bin/zsh", "emulator": "zupershell"])
@@ -181,7 +185,7 @@ if CommandLine.arguments.contains("--audit-selftest") {
     a.log("clipboard_write", ["targets": "c", "bytes": 11,
                               "sha256": sha256hex(Data("hello world".utf8)),
                               "preview": "hello world", "policy": "allowed"])
-    a.log("cwd", ["dir": "/Users/duppster/src/zupershell"])   // slashes exercise \/ escaping
+    a.log("cwd", ["dir": "/Users/duppster/src/zupershell"])
     a.log("osc133", ["phase": "D", "name": "command_end", "exit": 0])
     a.log("process_exit", ["code": 0])
     a.flush()
@@ -194,14 +198,22 @@ app.setActivationPolicy(.regular)
 
 let mainMenu = NSMenu()
 
+// App menu (⌘, and ⌘Q)
 let appMenuItem = NSMenuItem()
 mainMenu.addItem(appMenuItem)
 let appMenu = NSMenu()
+let prefsItem = NSMenuItem(title: "Preferences…",
+                           action: #selector(PreferencesWindowController.showPreferences(_:)),
+                           keyEquivalent: ",")
+prefsItem.target = PreferencesWindowController.shared
+appMenu.addItem(prefsItem)
+appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(withTitle: "Quit zupershell",
                 action: #selector(NSApplication.terminate(_:)),
                 keyEquivalent: "q")
 appMenuItem.submenu = appMenu
 
+// Edit menu (⌘C / ⌘V via responder chain to the terminal view)
 let editMenuItem = NSMenuItem()
 mainMenu.addItem(editMenuItem)
 let editMenu = NSMenu(title: "Edit")
