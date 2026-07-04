@@ -4,11 +4,12 @@ import SwiftTerm
 // ─────────────────────────────────────────────────────────────────────────────
 // zupershell — macOS terminal emulator with a built-in audit/security tap.
 //
-// SwiftTerm gives us the VT core (parser, grid, renderer, PTY). On top of it we
-// install sensors: OSC 52 (clipboard) and OSC 133 (command marks) via the
-// Terminal's registerOscHandler, plus title / cwd / process events via the
-// delegate. Everything lands in a signed JSONL feed (see AuditLog.swift).
-// User-tunable config lives in ~/.zush/settings.json (see Settings.swift).
+// SwiftTerm provides the VT core (parser, grid, renderer, PTY). On top we
+// install sensors: OSC 52 (clipboard), OSC 133 (command marks + text), plus
+// title / cwd / process events via the delegate. Everything lands in a signed
+// JSONL feed (see AuditLog.swift). User config lives in ~/.zush/settings.json
+// (see Settings.swift). The menu bar + right-click popup are built from a
+// declarative JSON spec (see Menu.swift + Resources/menus.default.json).
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalViewDelegate {
@@ -17,7 +18,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
     let audit = AuditLog.shared
     let store = SettingsStore.shared
 
+    /// Action name → closure. Populated in installMenus(); every menu item
+    /// (menubar or popup) routes here via dispatchMenuAction:.
+    private var actions: [String: () -> Void] = [:]
+
+    /// Held so we can remove it before Prefs windows etc. get their events eaten.
+    private var cmdDragMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMenus()
+
         let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
 
         terminal = LocalProcessTerminalView(frame: frame)
@@ -28,25 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
         term.registerOscHandler(code: 133) { [weak self] d in self?.handleOSC133(Array(d)) }
 
-        // Apply scrollback BEFORE any output arrives (buffer rebuild is safe here
-        // since setup runs on a virgin terminal; live changes require a restart).
         term.options.scrollback = store.current.scrollbackLines
         term.setup(isReset: false)
 
-        // Apply all live-settable properties (font/colors/cursor) from settings.
         applyLiveSettings(store.current)
 
-        // React to preference changes for as long as the app lives.
         NotificationCenter.default.addObserver(forName: .zushSettingsChanged, object: nil, queue: .main) { [weak self] n in
             guard let self, let s = n.object as? Settings else { return }
             self.applyLiveSettings(s)
         }
 
-        // Spawn the user's login shell (argv[0] = "-zsh"), inheriting the FULL
-        // environment (startProcess replaces env, so we must copy it) plus:
-        //   • TERM / COLORTERM  — advertise 256-color + truecolor
-        //   • POWERLEVEL9K_TERM_SHELL_INTEGRATION=true — make p10k emit OSC 133
-        //   • TERM_PROGRAM=zupershell — identify ourselves + gate shell integration
+        // Spawn the login shell with a tuned environment.
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = (shell as NSString).lastPathComponent
         var env = ProcessInfo.processInfo.environment
@@ -69,27 +71,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         window.titleVisibility = .visible
         window.backgroundColor = Themes.byName(store.current.themeName).background
 
+        // Persist window frame across launches (AppKit built-in — one line of work).
+        // Applied only when the setting is on; otherwise the window centers each time.
+        if store.current.rememberWindowFrame {
+            window.setFrameAutosaveName("io.zyp.zupershell.mainWindow")
+        }
+
         let container = NSView(frame: frame)
         container.autoresizingMask = [.width, .height]
         terminal.frame = container.bounds.insetBy(dx: 0, dy: 4)
         terminal.autoresizingMask = [.width, .height]
         container.addSubview(terminal)
 
+        // Attach the right-click popup to the terminal view.
+        let spec = MenuLoader.load()
+        terminal.menu = MenuBuilder.buildPopup(spec, target: self, selector: #selector(dispatchMenuAction(_:)))
+
         window.contentView = container
-        window.center()
         window.makeKeyAndOrderFront(nil)
+        if !store.current.rememberWindowFrame { window.center() }
         window.makeFirstResponder(terminal)
         NSApp.activate(ignoringOtherApps: true)
+
+        // Cmd-drag anywhere to move the window (Ghostty-style). Guarded by setting.
+        // We install a local monitor scoped to leftMouseDown, only act when Cmd is
+        // held AND the event's window is our main window (so Prefs stays untouched).
+        installCmdDragMonitor()
 
         FileHandle.standardError.write("zupershell audit log: \(audit.path)\n".data(using: .utf8)!)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    // MARK: - Menus & actions
+
+    /// Build the menubar from JSON, then populate the action registry with
+    /// concrete closures. To add a new action: register it here + add a
+    /// matching item to menus.default.json (or ~/.zush/menus.json).
+    private func installMenus() {
+        let spec = MenuLoader.load()
+        NSApp.mainMenu = MenuBuilder.buildMenubar(spec, target: self, selector: #selector(dispatchMenuAction(_:)))
+
+        actions = [
+            // App
+            "about":            { NSApp.orderFrontStandardAboutPanel(nil) },
+            "showPreferences":  { PreferencesWindowController.shared.showPreferences(nil) },
+            "hide":             { NSApp.hide(nil) },
+            "hideOthers":       { NSApp.hideOtherApplications(nil) },
+            "showAll":          { NSApp.unhideAllApplications(nil) },
+            "quit":             { NSApp.terminate(nil) },
+            // File
+            "newWindow":        { [weak self] in self?.newWindow() },
+            "closeWindow":      { [weak self] in self?.window?.performClose(nil) },
+            // Edit — route through responder chain so terminal handles them
+            "copy":             { NSApp.sendAction(#selector(NSText.copy(_:)),       to: nil, from: nil) },
+            "paste":            { NSApp.sendAction(#selector(NSText.paste(_:)),      to: nil, from: nil) },
+            "selectAll":        { NSApp.sendAction(#selector(NSText.selectAll(_:)),  to: nil, from: nil) },
+            // View
+            "clearBuffer":      { [weak self] in self?.clearBuffer() },
+            "resetTerminal":    { [weak self] in self?.resetTerminal() },
+            "zoomIn":           { [weak self] in self?.zoomFont(by:  1) },
+            "zoomOut":          { [weak self] in self?.zoomFont(by: -1) },
+            "zoomReset":        { [weak self] in self?.zoomFont(by:  0) },
+            // Window
+            "minimize":         { [weak self] in self?.window?.miniaturize(nil) },
+            "zoomWindow":       { [weak self] in self?.window?.zoom(nil) },
+            "bringAllToFront":  { NSApp.arrangeInFront(nil) },
+        ]
+    }
+
+    @objc func dispatchMenuAction(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        audit.log("menu_action", ["name": name, "source": sender.menu?.title.isEmpty == false ? "menubar" : "popup"])
+        actions[name]?()
+    }
+
+    // MARK: - Concrete action bodies
+
+    private func newWindow() {
+        // Stub for now — a real "new window" needs to extract terminal creation
+        // into a factory that this delegate can call multiple times. Log the ask
+        // so we know it's exercised; wire the second-window path in a later pass.
+        audit.log("action_stub", ["name": "newWindow", "note": "not yet implemented"])
+    }
+
+    private func clearBuffer() {
+        // ESC c is a hard reset that clears both viewport and scrollback.
+        // ESC[H\e[2J = home + erase display (viewport only). We use the former.
+        terminal.feed(text: "\u{1B}c")
+    }
+
+    private func resetTerminal() {
+        terminal.getTerminal().resetToInitialState()
+    }
+
+    private func zoomFont(by delta: Double) {
+        var s = store.current
+        s.fontSize = delta == 0 ? 13 : max(9, min(24, s.fontSize + delta))
+        store.save(s)
+    }
+
     // MARK: - Apply settings
 
-    /// Push font, palette, cursor, and window bg into the running terminal view.
-    /// Called at startup and on every settings save.
     private func applyLiveSettings(_ s: Settings) {
         let theme = Themes.byName(s.themeName)
         terminal.font = s.nsFont()
@@ -100,11 +183,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         terminal.caretColor = theme.cursor
         terminal.getTerminal().setCursorStyle(s.swiftTermCursor)
         window?.backgroundColor = theme.background
+        window?.alphaValue = CGFloat(max(0.5, min(1.0, s.windowOpacity)))
+        // Frame autosave & drag monitor are set at window creation; on toggle changes we
+        // update the monitor state so Cmd-drag can be turned off without a restart.
+        installCmdDragMonitor()
+    }
+
+    // MARK: - Cmd-drag anywhere
+
+    /// Add/remove the Cmd-drag monitor based on the current setting. The monitor
+    /// intercepts left-mouse-down in the main window when Cmd is held, hands the
+    /// event to window.performDrag, and swallows it so the terminal doesn't see
+    /// a phantom click. Any other event flows through unchanged.
+    private func installCmdDragMonitor() {
+        if let m = cmdDragMonitor { NSEvent.removeMonitor(m); cmdDragMonitor = nil }
+        guard store.current.dragWithCmdClick else { return }
+        cmdDragMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, event.window === self.window,
+                  event.modifierFlags.contains(.command) else { return event }
+            self.window.performDrag(with: event)
+            return nil
+        }
     }
 
     // MARK: - Sensors
 
-    /// OSC 52 payload = "<targets>;<base64 | ?>"
     private func handleOSC52(_ bytes: [UInt8]) {
         let s = String(decoding: bytes, as: UTF8.self)
         let parts = s.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
@@ -136,9 +239,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
         pb.setString(text, forType: .string)
     }
 
-    /// OSC 133 payload = phase char, optionally ";<extra>":
-    ///   • "D;<exit>"       — command finished with that exit code
-    ///   • "C;<base64-cmd>" — zupershell extension: the command text as typed
     private func handleOSC133(_ bytes: [UInt8]) {
         let s = String(decoding: bytes, as: UTF8.self)
         let f = s.split(separator: ";", omittingEmptySubsequences: false)
@@ -175,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalVi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bootstrap (SPM executable, no .xib).
+// Bootstrap
 // ─────────────────────────────────────────────────────────────────────────────
 
 if CommandLine.arguments.contains("--audit-selftest") {
@@ -195,34 +295,6 @@ if CommandLine.arguments.contains("--audit-selftest") {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
-
-let mainMenu = NSMenu()
-
-// App menu (⌘, and ⌘Q)
-let appMenuItem = NSMenuItem()
-mainMenu.addItem(appMenuItem)
-let appMenu = NSMenu()
-let prefsItem = NSMenuItem(title: "Preferences…",
-                           action: #selector(PreferencesWindowController.showPreferences(_:)),
-                           keyEquivalent: ",")
-prefsItem.target = PreferencesWindowController.shared
-appMenu.addItem(prefsItem)
-appMenu.addItem(NSMenuItem.separator())
-appMenu.addItem(withTitle: "Quit zupershell",
-                action: #selector(NSApplication.terminate(_:)),
-                keyEquivalent: "q")
-appMenuItem.submenu = appMenu
-
-// Edit menu (⌘C / ⌘V via responder chain to the terminal view)
-let editMenuItem = NSMenuItem()
-mainMenu.addItem(editMenuItem)
-let editMenu = NSMenu(title: "Edit")
-editMenu.addItem(withTitle: "Copy",  action: #selector(NSText.copy(_:)),  keyEquivalent: "c")
-editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-editMenuItem.submenu = editMenu
-
-app.mainMenu = mainMenu
-
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

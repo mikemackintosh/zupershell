@@ -24,6 +24,11 @@ struct Settings: Codable, Equatable {
     var useBrightColors: Bool = true
     var clipboardWriteAllowed: Bool = true
 
+    // Window behavior
+    var rememberWindowFrame: Bool = true
+    var dragWithCmdClick: Bool = true
+    var windowOpacity: Double = 1.0           // 0.5–1.0; anything lower gets illegible
+
     static let cursorStyles = ["blinkBlock","steadyBlock","blinkUnderline","steadyUnderline","blinkBar","steadyBar"]
 
     var swiftTermCursor: CursorStyle { CursorStyle.from(string: cursorStyle) ?? .steadyBlock }

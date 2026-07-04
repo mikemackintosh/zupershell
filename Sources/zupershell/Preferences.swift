@@ -47,6 +47,16 @@ struct PreferencesView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Window") {
+                Toggle("Remember window position and size", isOn: $s.rememberWindowFrame)
+                Toggle("Move window with Cmd-drag from anywhere", isOn: $s.dragWithCmdClick)
+                Stepper(value: $s.windowOpacity, in: 0.5...1.0, step: 0.05) {
+                    Text("Opacity: \(Int(s.windowOpacity * 100))%")
+                }
+                Text("Window frame changes apply on next window. Opacity and Cmd-drag apply live.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Security") {
                 Toggle("Allow programmatic clipboard writes (OSC 52)", isOn: $s.clipboardWriteAllowed)
                 Text("When off, sequences that write to your clipboard are logged and blocked. Every attempt is audited either way.")

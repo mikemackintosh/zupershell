@@ -1,0 +1,65 @@
+{
+  "menubar": [
+    {
+      "title": "Zupershell",
+      "isAppMenu": true,
+      "items": [
+        { "title": "About Zupershell",      "action": "about" },
+        { "separator": true },
+        { "title": "Preferences…",          "shortcut": "cmd+,",         "action": "showPreferences" },
+        { "separator": true },
+        { "title": "Hide Zupershell",       "shortcut": "cmd+h",         "action": "hide" },
+        { "title": "Hide Others",           "shortcut": "cmd+opt+h",     "action": "hideOthers" },
+        { "title": "Show All",                                          "action": "showAll" },
+        { "separator": true },
+        { "title": "Quit Zupershell",       "shortcut": "cmd+q",         "action": "quit" }
+      ]
+    },
+    {
+      "title": "File",
+      "items": [
+        { "title": "New Window",            "shortcut": "cmd+n",         "action": "newWindow" },
+        { "separator": true },
+        { "title": "Close Window",          "shortcut": "cmd+w",         "action": "closeWindow" }
+      ]
+    },
+    {
+      "title": "Edit",
+      "items": [
+        { "title": "Copy",                  "shortcut": "cmd+c",         "action": "copy" },
+        { "title": "Paste",                 "shortcut": "cmd+v",         "action": "paste" },
+        { "separator": true },
+        { "title": "Select All",            "shortcut": "cmd+a",         "action": "selectAll" }
+      ]
+    },
+    {
+      "title": "View",
+      "items": [
+        { "title": "Clear Buffer",          "shortcut": "cmd+k",         "action": "clearBuffer" },
+        { "title": "Reset Terminal",        "shortcut": "cmd+opt+r",     "action": "resetTerminal" },
+        { "separator": true },
+        { "title": "Zoom In",               "shortcut": "cmd+=",         "action": "zoomIn" },
+        { "title": "Zoom Out",              "shortcut": "cmd+-",         "action": "zoomOut" },
+        { "title": "Actual Size",           "shortcut": "cmd+0",         "action": "zoomReset" }
+      ]
+    },
+    {
+      "title": "Window",
+      "items": [
+        { "title": "Minimize",              "shortcut": "cmd+m",         "action": "minimize" },
+        { "title": "Zoom",                                              "action": "zoomWindow" },
+        { "separator": true },
+        { "title": "Bring All to Front",                                "action": "bringAllToFront" }
+      ]
+    }
+  ],
+  "contextMenu": [
+    { "title": "Copy",                      "action": "copy" },
+    { "title": "Paste",                     "action": "paste" },
+    { "separator": true },
+    { "title": "Select All",                "action": "selectAll" },
+    { "title": "Clear Buffer",              "action": "clearBuffer" },
+    { "separator": true },
+    { "title": "Preferences…",              "action": "showPreferences" }
+  ]
+}

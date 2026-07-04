@@ -12,7 +12,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "zupershell",
-            dependencies: ["SwiftTerm"]
+            dependencies: ["SwiftTerm"],
+            resources: [.copy("Resources/menus.default.json")]
         )
     ],
     // Pin to Swift 5 language mode to avoid Swift 6 strict-concurrency errors in a starter.
