@@ -1,0 +1,15 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Xcode (if anyone opens the SPM package in Xcode later)
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# The built .app is a reproducible artifact — build it with ./bundle.sh
+myterm.app/
+
+# macOS crumbs
+.DS_Store
