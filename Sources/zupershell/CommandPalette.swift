@@ -269,16 +269,26 @@ final class PaletteTextField: NSTextField {
     }
 }
 
-/// Floating panel — non-activating, borderless, with a visual-effect blur
-/// backdrop so it sits above the terminal windows Spotlight-style.
+/// Borderless panel that CAN take key focus — the default NSPanel with
+/// .borderless / .nonactivatingPanel refuses first-responder status, which
+/// is why keystrokes were falling through to the terminal window behind it.
+private final class KeyableFloatingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+    // Esc anywhere in the panel should dismiss — AppKit's default cancel op.
+    override func cancelOperation(_ sender: Any?) { close() }
+}
+
+/// Floating panel — borderless, keyable, with a visual-effect blur backdrop
+/// so it sits above the terminal windows Spotlight-style.
 final class PaletteWindowController: NSWindowController {
     static let shared = PaletteWindowController()
     private let themeObs = ThemeObservable()
 
     private init() {
-        let panel = NSPanel(
+        let panel = KeyableFloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
-            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )
         panel.isFloatingPanel = true
@@ -326,6 +336,25 @@ final class PaletteWindowController: NSWindowController {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        // Explicitly force key + first responder on the hosted text field.
+        // Without this, borderless panels can end up visible but not key,
+        // so keystrokes leak through to whatever was previously focused
+        // (the terminal window behind the palette).
+        window?.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            guard let host = self?.window?.contentView else { return }
+            if let field = Self.findTextField(in: host) {
+                self?.window?.makeFirstResponder(field)
+            }
+        }
+    }
+
+    private static func findTextField(in view: NSView) -> NSTextField? {
+        if let tf = view as? NSTextField { return tf }
+        for sub in view.subviews {
+            if let found = findTextField(in: sub) { return found }
+        }
+        return nil
     }
 
     private func centerOnKeyScreen() {
