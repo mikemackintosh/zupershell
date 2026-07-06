@@ -334,43 +334,61 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     private final class GlowOverlayView: NSView {
         var ringColor: NSColor = .clear
         var cornerRadius: CGFloat = 10
-        var strokeWidth: CGFloat = 1.2
-        var glowRadius: CGFloat = 6
+        var outlineWidth: CGFloat = 1.0
+        var glowWidth: CGFloat = 8            // thick stroke; half of it clips outside
+        var glowBlur: CGFloat = 3             // shadow radius on the inner glow
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            layer?.masksToBounds = false   // shadow can bleed
+            // Clip to a rounded rectangle so the OUTER half of the glow stroke
+            // and its shadow get clipped away, leaving only the INSET portion
+            // visible — that's what turns a bidirectional shadow into a proper
+            // inset glow (CSS `inset 0 0 3px 1px` equivalent).
+            layer?.masksToBounds = true
+            layer?.cornerRadius = cornerRadius
         }
         required init?(coder: NSCoder) { fatalError() }
-        // Pass ALL mouse events through — decorative overlay only.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func layout() { super.layout(); rebuildRing() }
 
         func rebuildRing() {
             layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+            layer?.cornerRadius = cornerRadius
             guard bounds.width > 0, bounds.height > 0, ringColor.alphaComponent > 0 else { return }
 
-            // Rounded-rect stroke matching the macOS window corner radius.
-            // The stroke is thin (~1pt); the actual "glow" comes from
-            // shadowRadius acting as a Gaussian blur around the path.
-            let inset: CGFloat = 1
-            let rect = bounds.insetBy(dx: inset, dy: inset)
-            let ring = CAShapeLayer()
-            ring.path = roundedRectPath(rect, radius: cornerRadius)
-            ring.fillColor = nil
-            ring.strokeColor = ringColor.cgColor
-            ring.lineWidth = strokeWidth
-            ring.frame = bounds
-            // Shadow = Gaussian blur of the stroked path, bleeding both ways.
-            // This is what gives the soft neon halo effect.
-            ring.shadowColor = ringColor.cgColor
-            ring.shadowRadius = glowRadius
-            ring.shadowOpacity = 1.0
-            ring.shadowOffset = .zero
-            ring.masksToBounds = false
-            layer?.addSublayer(ring)
+            let path = roundedRectPath(bounds, radius: cornerRadius)
+
+            // Layer 1 — INSET GLOW (soft, blurred, bleeds inward).
+            // A thick stroke centered on the rounded path: half of its
+            // thickness (~4pt) draws OUTSIDE the path but gets clipped by our
+            // masksToBounds rounded corner mask; the other half draws INSIDE
+            // and is visible. shadowRadius adds Gaussian softness.
+            let glowAlpha = ringColor.alphaComponent * 0.55  // matches the 0.5 in Mike's CSS
+            let glowColor = ringColor.withAlphaComponent(glowAlpha)
+            let glow = CAShapeLayer()
+            glow.frame = bounds
+            glow.path = path
+            glow.fillColor = nil
+            glow.strokeColor = glowColor.cgColor
+            glow.lineWidth = glowWidth
+            glow.shadowColor = glowColor.cgColor
+            glow.shadowRadius = glowBlur
+            glow.shadowOpacity = 1.0
+            glow.shadowOffset = .zero
+            glow.masksToBounds = false  // shadow of THIS layer can bleed; parent clips
+            layer?.addSublayer(glow)
+
+            // Layer 2 — CRISP THIN OUTLINE at the edge (Mike's `0 0 0 0.5px`).
+            // Drawn on top so it reads as the "ring" of the CSS effect.
+            let outline = CAShapeLayer()
+            outline.frame = bounds
+            outline.path = path
+            outline.fillColor = nil
+            outline.strokeColor = ringColor.cgColor
+            outline.lineWidth = outlineWidth
+            layer?.addSublayer(outline)
         }
 
         /// Manual rounded-rect path (macOS-13 compatible; NSBezierPath.cgPath
