@@ -228,6 +228,20 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     func windowWillClose(_ notification: Notification) {
         audit.log("window_closed", [:])
         audit.flush()
-        coordinator?.removeSession(self)
+        // IMPORTANT: defer removeSession to the next runloop tick.
+        //
+        // AppKit runs a close animation (_NSWindowTransformAnimation) that
+        // holds blocks capturing views/delegates from this window. If we
+        // drop our last strong ref synchronously here, SessionWindow
+        // deallocs immediately, its terminal view + observers tear down,
+        // and the animation's cleanup on the NEXT CATransaction commit
+        // over-releases a freed pointer — killing every window in the app.
+        //
+        // Posting async {} runs the removal on the next main-loop pass,
+        // after AppKit's animation has finished with everything it borrowed.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.coordinator?.removeSession(self)
+        }
     }
 }

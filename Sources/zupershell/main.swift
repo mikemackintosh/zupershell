@@ -30,14 +30,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.installCmdDragMonitor()
         }
 
-        // Repro/soak affordance: if $ZUSH_AUTO_OPEN_N is set to a positive
-        // integer, open that many additional windows staggered by 400ms each.
-        // Lets us reproduce multi-window crashes without depending on the
-        // human pressing ⌘N. Bail out on shutdown to be safe.
+        // Repro/soak affordance:
+        //   ZUSH_AUTO_OPEN_N=N       → open N extra windows, 400ms apart
+        //   ZUSH_AUTO_CLOSE_FIRST=1  → close the first window after all opened
+        //                              (exercises the close-teardown code path)
+        // Together they turn "press ⌘N N times then ⌘W once" into a headless
+        // soak test we can invoke from a shell script.
         if let n = ProcessInfo.processInfo.environment["ZUSH_AUTO_OPEN_N"].flatMap(Int.init), n > 0 {
             for i in 1...n {
                 DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400 * i)) { [weak self] in
                     _ = self?.newWindow()
+                }
+            }
+            if ProcessInfo.processInfo.environment["ZUSH_AUTO_CLOSE_FIRST"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400 * (n + 2))) { [weak self] in
+                    self?.sessions.first?.window.performClose(nil)
                 }
             }
         }
