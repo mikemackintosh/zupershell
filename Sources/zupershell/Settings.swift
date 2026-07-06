@@ -19,6 +19,10 @@ struct Settings: Codable, Equatable {
     var themeName: String = "Aura"
     var fontName: String = "Hack Nerd Font Mono"
     var fontSize: Double = 13
+    /// "Thin strokes" on Retina — disables subpixel font smoothing which
+    /// otherwise thickens glyphs on dark backgrounds. True = match iTerm's
+    /// out-of-box thinner appearance; false = macOS default (heavier).
+    var thinStrokes: Bool = true
     var cursorStyle: String = "steadyBlock"   // matches SwiftTerm.CursorStyle rawish name
     var scrollbackLines: Int = 10_000
     var useBrightColors: Bool = true

@@ -34,6 +34,8 @@ struct PreferencesView: View {
                         Text("Size: \(String(format: "%.1f", s.fontSize)) pt")
                     }
                     Toggle("Use bright colors for bold text", isOn: $s.useBrightColors)
+                    Toggle("Thin strokes (Retina)", isOn: $s.thinStrokes)
+                    caption("Thin strokes disables subpixel font smoothing so glyphs don't render bolded on dark backgrounds. Matches iTerm's default look.")
                 }
 
                 Section("Cursor") {

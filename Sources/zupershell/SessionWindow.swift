@@ -163,6 +163,9 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     func applyLiveSettings(_ s: Settings) {
         let theme = Themes.byName(s.themeName)
         terminal.font = s.nsFont()
+        // "Thin strokes" — invert the SwiftTerm fontSmoothing default so
+        // Retina glyphs don't render bolded. Matches iTerm2's out-of-box look.
+        terminal.fontSmoothing = !s.thinStrokes
         terminal.useBrightColors = s.useBrightColors
         terminal.installColors(theme.swiftTermPalette)
         terminal.nativeBackgroundColor = theme.background
