@@ -14,11 +14,32 @@ import SwiftTerm
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class ZushTerminalView: LocalProcessTerminalView {
-    /// Fired when the terminal rings its bell (BEL, 0x07). Claude Code (and
-    /// other TUIs) emits BEL when waiting for user input — approval prompts,
-    /// menu confirmations, etc. Set from SessionWindow so it can update the
-    /// session summary's pendingAttention flag.
+    /// Fired when the terminal rings its bell (BEL, 0x07). Some TUIs use BEL
+    /// to request attention; catch it as one of several attention signals.
     var onBell: (() -> Void)?
+
+    /// Wallclock of the most recent PTY read. Kept for potential future
+    /// use / diagnostics.
+    private(set) var lastDataAt: Date = Date()
+
+    /// Fired for every PTY chunk with the chunk's UTF-8 decoded text.
+    /// SessionWindow scans it for known "waiting-for-input" prompt patterns
+    /// (Claude Code's "Do you want to proceed?", generic `(y/n)`, etc.).
+    /// Pattern matching beats silence detection here because TUIs like
+    /// Claude Code re-render selector/spinner state every ~200ms — silence
+    /// never crosses any reasonable threshold.
+    var onDataChunk: ((String) -> Void)?
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        lastDataAt = Date()
+        if let cb = onDataChunk {
+            // Decode only if we have a subscriber. Non-fatal lossy decode is
+            // fine — we're pattern-matching English strings, not parsing bytes.
+            let text = String(decoding: slice, as: UTF8.self)
+            cb(text)
+        }
+        super.dataReceived(slice: slice)
+    }
 
     /// Same story as requestOpenLink — not `override` because bell() only
     /// exists on TerminalViewDelegate as a protocol extension default, not

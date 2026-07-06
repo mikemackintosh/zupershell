@@ -71,12 +71,27 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             window.setFrameAutosaveName("io.zyp.zupershell.mainWindow")
         }
 
-        // Bell (BEL, 0x07) fires when the terminal wants attention — TUIs
-        // like Claude Code emit BEL on approval prompts. Flag the session so
-        // the Overview surfaces it.
+        // Attention signals — two ways a session can flag "needs input":
+        //   1. BEL (0x07) — universal, but many modern TUIs don't emit it.
+        //   2. Prompt pattern match — scan PTY output for known "waiting
+        //      for user" strings ("Do you want to proceed?", "(y/n)", etc.).
+        //
+        // Pattern matching was chosen over PTY-silence detection because
+        // Claude Code re-renders its selector/footer every ~200ms while
+        // waiting for input — silence never crosses any reasonable
+        // threshold. Diagnostic: silence values seen were 0.05–2.14s.
         terminal.onBell = { [weak self] in
             self?.summary.markNeedsAttention()
             self?.audit.log("bell", [:])
+        }
+        terminal.onDataChunk = { [weak self] chunk in
+            guard let self, self.summary.isRunning else { return }
+            if SessionWindow.chunkNeedsAttention(chunk) {
+                if !self.summary.pendingAttention {
+                    self.audit.log("attention_prompt", ["match": true])
+                }
+                self.summary.markNeedsAttention()
+            }
         }
 
         // Install sensors on the underlying Terminal (safe to do pre-hosting).
@@ -420,6 +435,29 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// becomes muddy purple, etc.); explicit RGB triples of pure "neon"
     /// primaries pop way harder. Deterministic pick via FNV-1a hash of the
     /// session ID.
+    /// Case-insensitive substring check for known "session is waiting on
+    /// user input" phrases. Kept deliberately narrow so we don't false-
+    /// positive on log output that just happens to mention "y/n" in prose.
+    static func chunkNeedsAttention(_ chunk: String) -> Bool {
+        let lower = chunk.lowercased()
+        for p in attentionPhrases where lower.contains(p) { return true }
+        return false
+    }
+
+    private static let attentionPhrases: [String] = [
+        "do you want to proceed",     // Claude Code approval prompt
+        "do you want to continue",
+        "are you sure",
+        "press any key",
+        "(y/n)",
+        "(y/n):",
+        "(y/n)?",
+        "[y/n]",
+        "[y/n]:",
+        "[y/n]?",
+        "confirm (y/n)",
+    ]
+
     /// Exposed so the Overview can tag each session row with the same
     /// palette color as its window glow.
     static func neonColor(for id: String) -> NSColor {

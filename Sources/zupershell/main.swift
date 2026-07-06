@@ -174,9 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Cmd-drag anywhere
 
-    /// Fires every 10s to scan sessions for a still-running command that has
-    /// been silent longer than the configured threshold. Posts one macOS user
-    /// notification per stalled run.
+    /// Ticks every 2s to poll two things per session:
+    ///   1. PTY silence while running → mark pendingAttention (catches TUIs
+    ///      like Claude Code that don't emit BEL on approval prompts).
+    ///   2. Long-idle notification threshold → post macOS notification once.
     func installIdleNotifier() {
         idleTimer?.invalidate()
         idleTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -187,17 +188,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func checkIdleSessions() {
         let s = store.current
         guard s.idleNotifyEnabled else { return }
-        let threshold = TimeInterval(s.idleNotifyThresholdSeconds)
+        let notifyThreshold = TimeInterval(s.idleNotifyThresholdSeconds)
         let now = Date()
         for session in sessions {
             let sum = session.summary
-            // Clear alert bit when a command finishes.
-            if !sum.isRunning { idleAlerted.remove(sum.id); continue }
-            guard let cmd = sum.currentCommand,
-                  now.timeIntervalSince(sum.lastActivity) >= threshold,
-                  !idleAlerted.contains(sum.id) else { continue }
-            idleAlerted.insert(sum.id)
-            postIdleNotification(cmd: cmd, title: sum.title, elapsed: Int(now.timeIntervalSince(sum.lastActivity)))
+            if sum.isRunning, let cmd = sum.currentCommand,
+               now.timeIntervalSince(sum.lastActivity) >= notifyThreshold,
+               !idleAlerted.contains(sum.id) {
+                idleAlerted.insert(sum.id)
+                postIdleNotification(cmd: cmd, title: sum.title,
+                                     elapsed: Int(now.timeIntervalSince(sum.lastActivity)))
+            }
+            if !sum.isRunning { idleAlerted.remove(sum.id) }
         }
     }
 
