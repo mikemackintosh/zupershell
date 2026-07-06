@@ -412,7 +412,9 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// becomes muddy purple, etc.); explicit RGB triples of pure "neon"
     /// primaries pop way harder. Deterministic pick via FNV-1a hash of the
     /// session ID.
-    private static func neonColor(for id: String) -> NSColor {
+    /// Exposed so the Overview can tag each session row with the same
+    /// palette color as its window glow.
+    static func neonColor(for id: String) -> NSColor {
         let palette: [NSColor] = [
             NSColor(srgbRed: 1.00, green: 0.20, blue: 0.65, alpha: 1),  // hot pink
             NSColor(srgbRed: 0.20, green: 1.00, blue: 0.50, alpha: 1),  // lime

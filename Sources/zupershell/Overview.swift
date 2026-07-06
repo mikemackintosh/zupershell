@@ -185,11 +185,12 @@ struct CompactSessionRow: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(hovering ? theme.fg.opacity(0.06) : Color.clear)
         .overlay(alignment: .leading) {
-            // Left-edge accent bar on hover, gives a distinct affordance for
-            // dense compact rows without a full border.
+            // Left-edge bar in the session's neon-palette color — same tint
+            // as the terminal window's glow, so rows and windows are visually
+            // linked. Widens on hover for stronger click affordance.
             Rectangle()
-                .fill(theme.accent)
-                .frame(width: hovering ? 3 : 0)
+                .fill(Color(nsColor: SessionWindow.neonColor(for: s.id)))
+                .frame(width: hovering ? 3 : 2)
         }
         .onHover { h in
             hovering = h
@@ -254,10 +255,18 @@ struct SessionCard: View {
     let now: Date
     @State private var hovering = false
 
+    /// Same neon-palette color the terminal window uses for its glow — ties
+    /// each Overview row to its window at a glance.
+    private var sessionTint: Color { Color(nsColor: SessionWindow.neonColor(for: s.id)) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 statusDot
+                // Small color chip matching the window's neon glow.
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(sessionTint)
+                    .frame(width: 3, height: 14)
                 Text(s.title).font(.headline).foregroundStyle(theme.fg).lineLimit(1)
                 Spacer()
                 Text(relativeTime(from: s.lastActivity, to: now))
