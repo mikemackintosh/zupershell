@@ -86,12 +86,16 @@ struct PaletteView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
-                        row(for: item, isSelected: idx == selection)
+                    // Track "which session number is this row?" — increments
+                    // only for .focusSession items, so ⌘1 always means the
+                    // first session even if a "Run in new window" row sits above.
+                    let numbered = itemsWithSessionIndex()
+                    ForEach(Array(numbered.enumerated()), id: \.element.item.id) { idx, entry in
+                        row(for: entry.item, isSelected: idx == selection, sessionNumber: entry.sessionN)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selection = idx
-                                onAction(item)
+                                onAction(entry.item)
                             }
                     }
                     if items.isEmpty {
@@ -106,6 +110,7 @@ struct PaletteView: View {
             HStack(spacing: 12) {
                 footerHint("↑↓", "navigate")
                 footerHint("↩", "run/focus")
+                footerHint("⌘1-9", "jump")
                 footerHint("esc", "close")
                 Spacer()
             }
@@ -117,7 +122,15 @@ struct PaletteView: View {
         .onChange(of: query) { _ in selection = 0 }
     }
 
-    @ViewBuilder private func row(for item: PaletteItem, isSelected: Bool) -> some View {
+    private func itemsWithSessionIndex() -> [(item: PaletteItem, sessionN: Int?)] {
+        var n = 0
+        return items.map { it in
+            if case .focusSession = it { n += 1; return (it, n <= 9 ? n : nil) }
+            return (it, nil)
+        }
+    }
+
+    @ViewBuilder private func row(for item: PaletteItem, isSelected: Bool, sessionNumber: Int?) -> some View {
         HStack(spacing: 10) {
             switch item {
             case .runInNewWindow(let cmd):
@@ -148,6 +161,14 @@ struct PaletteView: View {
                 }
             }
             Spacer()
+            // ⌘N hint on the first 9 session rows so the shortcut is discoverable.
+            if let n = sessionNumber {
+                Text("⌘\(n)")
+                    .font(.system(.caption, design: .monospaced).bold())
+                    .foregroundStyle(theme.dim)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.dim.opacity(0.18)))
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(isSelected ? theme.accent.opacity(0.22) : Color.clear)
@@ -287,6 +308,7 @@ private final class KeyableFloatingPanel: NSPanel {
 final class PaletteWindowController: NSWindowController {
     static let shared = PaletteWindowController()
     private let themeObs = ThemeObservable()
+    private var keyMonitor: Any?
 
     private init() {
         let panel = KeyableFloatingPanel(
@@ -339,10 +361,6 @@ final class PaletteWindowController: NSWindowController {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        // Explicitly force key + first responder on the hosted text field.
-        // Without this, borderless panels can end up visible but not key,
-        // so keystrokes leak through to whatever was previously focused
-        // (the terminal window behind the palette).
         window?.makeKey()
         DispatchQueue.main.async { [weak self] in
             guard let host = self?.window?.contentView else { return }
@@ -350,6 +368,42 @@ final class PaletteWindowController: NSWindowController {
                 self?.window?.makeFirstResponder(field)
             }
         }
+        installKeyMonitor()
+    }
+
+    /// Local key-down monitor: catches ⌘1..⌘9 while the palette is key and
+    /// focuses the Nth SESSION in the current result list (skipping any
+    /// "Run in new window" row, since that's not indexable by position).
+    /// The field editor swallows keyDown, so a local monitor is the right
+    /// place to intercept — it sees the event before the responder chain.
+    private func installKeyMonitor() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self.window,
+                  event.modifierFlags.contains(.command),
+                  let chars = event.charactersIgnoringModifiers, chars.count == 1,
+                  let digit = Int(chars), (1...9).contains(digit) else { return event }
+            self.focusNthSession(digit)
+            return nil   // swallow — don't insert a digit into the field
+        }
+    }
+
+    private func focusNthSession(_ n: Int) {
+        // Uses the same ordering the palette displays: attention → running →
+        // recent activity. If a query is active, filter first.
+        let sorted = AppDelegateBridge.registry.summaries.sorted { a, b in
+            if a.pendingAttention != b.pendingAttention { return a.pendingAttention }
+            if a.isRunning != b.isRunning { return a.isRunning }
+            return a.lastActivity > b.lastActivity
+        }
+        guard sorted.indices.contains(n - 1) else { NSSound.beep(); return }
+        close()
+        AppDelegateBridge.focusSession(sorted[n - 1].id)
+    }
+
+    override func close() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        super.close()
     }
 
     private static func findTextField(in view: NSView) -> NSTextField? {
