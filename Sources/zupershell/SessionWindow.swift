@@ -31,9 +31,10 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// paint the per-window glow (gradient sublayers on its layer).
     private var containerView: NSView!
 
-    /// Sublayers we've added for the four-edge glow effect. Held so we can
-    /// tear them down when the setting changes or intensity is updated.
-    private var glowLayers: [CAGradientLayer] = []
+    /// Overlay view holding the four-edge gradient layers. Sits ABOVE the
+    /// terminal in the subview stack so AppKit guarantees paint-on-top, and
+    /// passes mouse events through via hitTest→nil.
+    private var glowOverlay: GlowOverlayView?
 
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
@@ -188,23 +189,35 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         applyGlow(s)
     }
 
-    /// Four-edge soft glow: each edge gets a CAGradientLayer fading from the
-    /// tint at the very edge to fully transparent about `blur` points inward.
-    /// This reads as a diffuse halo rather than a hard border, which was Mike's
-    /// direct feedback on the earlier borderColor approach.
+    /// Four-edge soft glow using an OVERLAY subview added after the terminal.
+    /// Subview stack order is authoritative in AppKit, so the overlay is
+    /// guaranteed to paint above the terminal — a plain container-layer
+    /// sublayer approach didn't (glow was hidden behind the opaque terminal
+    /// background on 3 of 4 edges).
     ///
-    /// Color is derived from a stable FNV-1a hash of the session ID so it's
-    /// consistent across relaunches and doesn't jump between windows.
+    /// The overlay's own layer holds the four CAGradientLayer sides. Mouse
+    /// events pass through via hitTest→nil so clicks / selection still land
+    /// on the terminal.
     private func applyGlow(_ s: Settings) {
-        guard let layer = containerView?.layer else { return }
+        guard let container = containerView else { return }
 
-        // Tear down anything previously installed.
-        layer.borderWidth = 0
-        layer.borderColor = nil
-        glowLayers.forEach { $0.removeFromSuperlayer() }
-        glowLayers = []
+        guard s.windowGlowEnabled else {
+            glowOverlay?.removeFromSuperview()
+            glowOverlay = nil
+            return
+        }
 
-        guard s.windowGlowEnabled else { return }
+        // Lazy create the overlay and add it AS THE LAST subview so it's on top.
+        let overlay: GlowOverlayView
+        if let existing = glowOverlay {
+            overlay = existing
+            overlay.layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+        } else {
+            overlay = GlowOverlayView(frame: container.bounds)
+            overlay.autoresizingMask = [.width, .height]
+            container.addSubview(overlay)   // added AFTER terminal → z-order on top
+            glowOverlay = overlay
+        }
 
         let alpha = CGFloat(max(0.0, min(0.6, s.windowGlowIntensity)))
         let hue = SessionWindow.hue(for: audit.sessionID)
@@ -212,7 +225,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         let clear = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: 0)
         let colors = [solid.cgColor, clear.cgColor]
         let blur: CGFloat = 40
-        let b = layer.bounds
+        let b = overlay.bounds
 
         // Top edge: solid at top, fading down.
         let top = CAGradientLayer()
@@ -246,19 +259,8 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         right.frame = CGRect(x: b.width - blur, y: 0, width: blur, height: b.height)
         right.autoresizingMask = [.layerHeightSizable, .layerMinXMargin]
 
-        // Z-order: the terminal view's layer is opaque, so a plain addSublayer
-        // to container.layer put our glow BEHIND the terminal — invisible except
-        // in the titlebar strip where the terminal doesn't paint (that's why
-        // earlier only the top edge showed color). Insert ABOVE the terminal's
-        // backing layer so the gradient tints the edges of visible content.
-        let terminalLayer = terminal.layer
         for gl in [top, bottom, left, right] {
-            if let tl = terminalLayer {
-                layer.insertSublayer(gl, above: tl)
-            } else {
-                layer.addSublayer(gl)
-            }
-            glowLayers.append(gl)
+            overlay.layer?.addSublayer(gl)
         }
     }
 
@@ -364,6 +366,17 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     }
 
     // MARK: - NSWindowDelegate
+
+    private final class GlowOverlayView: NSView {
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        // Pass ALL mouse events through — this is a decorative overlay only.
+        // Without this, clicks land here instead of the terminal.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 
     func windowWillClose(_ notification: Notification) {
         audit.log("window_closed", [:])
