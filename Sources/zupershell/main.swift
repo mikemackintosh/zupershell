@@ -23,6 +23,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenus()
+        // Populate the AppDelegateBridge focus closure so Overview rows can
+        // bring a specific window forward when clicked.
+        AppDelegateBridge.focusSession = { [weak self] sessionID in
+            guard let self,
+                  let match = self.sessions.first(where: { $0.audit.sessionID == sessionID })
+            else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            match.window.makeKeyAndOrderFront(nil)
+        }
+
         _ = newWindow()      // first window
         installCmdDragMonitor()
 

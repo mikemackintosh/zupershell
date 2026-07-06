@@ -133,6 +133,7 @@ struct CompactSessionRow: View {
     @ObservedObject var s: SessionSummary
     let theme: Theme
     let now: Date
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -182,6 +183,20 @@ struct CompactSessionRow: View {
                 .frame(width: 60, alignment: .trailing)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(hovering ? theme.fg.opacity(0.06) : Color.clear)
+        .overlay(alignment: .leading) {
+            // Left-edge accent bar on hover, gives a distinct affordance for
+            // dense compact rows without a full border.
+            Rectangle()
+                .fill(theme.accent)
+                .frame(width: hovering ? 3 : 0)
+        }
+        .onHover { h in
+            hovering = h
+            if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .onDisappear { if hovering { NSCursor.pop(); hovering = false } }
+        .zushClickableRow(sessionID: s.id)
     }
 
     private var statusDot: some View {
@@ -221,11 +236,23 @@ struct CompactSessionRow: View {
     }
 }
 
+/// Shared clickable-row behavior: pointing-hand cursor on hover, tap focuses
+/// the terminal window. Each row struct owns its own hover *visual* state
+/// since the card and compact-row want different treatments.
+@available(macOS 13, *)
+extension View {
+    func zushClickableRow(sessionID: String) -> some View {
+        contentShape(Rectangle())
+            .onTapGesture { AppDelegateBridge.focusSession(sessionID) }
+    }
+}
+
 @available(macOS 13, *)
 struct SessionCard: View {
     @ObservedObject var s: SessionSummary
     let theme: Theme
     let now: Date
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -287,9 +314,19 @@ struct SessionCard: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(theme.fg.opacity(0.04))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.dim.opacity(0.25), lineWidth: 1))
+                .fill(theme.fg.opacity(hovering ? 0.09 : 0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(hovering ? theme.accent.opacity(0.55) : theme.dim.opacity(0.25),
+                                lineWidth: hovering ? 1.2 : 1)
+                )
         )
+        .onHover { h in
+            hovering = h
+            if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .onDisappear { if hovering { NSCursor.pop(); hovering = false } }
+        .zushClickableRow(sessionID: s.id)
     }
 
     private var statusDot: some View {
@@ -389,8 +426,12 @@ final class OverviewWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
-/// Static bridge so the OverviewWindowController can grab the app-wide
-/// SessionsRegistry without needing a reference to AppDelegate at import time.
+/// Static bridge so SwiftUI-hosted windows can reach app-wide state without
+/// needing a compile-time reference to AppDelegate. Populated in
+/// AppDelegate.applicationDidFinishLaunching.
 enum AppDelegateBridge {
     static var registry = SessionsRegistry()
+    /// Bring the terminal window that owns this sessionID forward and make
+    /// it key. No-op if the ID doesn't match a live session.
+    static var focusSession: (String) -> Void = { _ in }
 }
