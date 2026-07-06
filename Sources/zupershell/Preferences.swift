@@ -39,6 +39,15 @@ struct PreferencesView: View {
                 }
             }
 
+            Section("Padding") {
+                Stepper(value: $s.paddingTop,      in: 0...40) { Text("Top: \(Int(s.paddingTop)) pt") }
+                Stepper(value: $s.paddingBottom,   in: 0...40) { Text("Bottom: \(Int(s.paddingBottom)) pt") }
+                Stepper(value: $s.paddingLeading,  in: 0...40) { Text("Leading: \(Int(s.paddingLeading)) pt") }
+                Stepper(value: $s.paddingTrailing, in: 0...40) { Text("Trailing: \(Int(s.paddingTrailing)) pt") }
+                Text("Space between the terminal grid and the window edges. Top starts below the titlebar strip. All four apply live.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Buffer") {
                 Stepper(value: $s.scrollbackLines, in: 500...200_000, step: 500) {
                     Text("Scrollback: \(s.scrollbackLines.formatted()) lines")

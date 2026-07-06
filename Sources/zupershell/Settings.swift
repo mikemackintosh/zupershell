@@ -29,6 +29,13 @@ struct Settings: Codable, Equatable {
     var dragWithCmdClick: Bool = true
     var windowOpacity: Double = 1.0           // 0.5–1.0; anything lower gets illegible
 
+    // Padding around the terminal grid (points). Top counts from below the
+    // titlebar strip (contentLayoutGuide.top). Live-adjustable via Preferences.
+    var paddingTop: Double = 0
+    var paddingBottom: Double = 4
+    var paddingLeading: Double = 0
+    var paddingTrailing: Double = 0
+
     static let cursorStyles = ["blinkBlock","steadyBlock","blinkUnderline","steadyUnderline","blinkBar","steadyBar"]
 
     var swiftTermCursor: CursorStyle { CursorStyle.from(string: cursorStyle) ?? .steadyBlock }

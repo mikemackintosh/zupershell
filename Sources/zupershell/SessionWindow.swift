@@ -18,6 +18,13 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     private weak var coordinator: AppDelegate?
     private var settingsObserver: NSObjectProtocol?
 
+    /// Edge constraints on the terminal. Held so applyLiveSettings can update
+    /// `.constant` on each in place (cheap, animates naturally, no re-activate).
+    private var padTopConstraint: NSLayoutConstraint!
+    private var padBottomConstraint: NSLayoutConstraint!
+    private var padLeadingConstraint: NSLayoutConstraint!
+    private var padTrailingConstraint: NSLayoutConstraint!
+
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
         self.audit = AuditLog()
@@ -87,16 +94,16 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
 
         terminal.translatesAutoresizingMaskIntoConstraints = false
         let contentGuide = window.contentLayoutGuide as? NSLayoutGuide
-        NSLayoutConstraint.activate([
-            terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            // Top pinned to the WINDOW's contentLayoutGuide, which excludes
-            // the titlebar strip. Fall back to the container's top if the
-            // guide isn't available (shouldn't happen on macOS 13+).
-            terminal.topAnchor.constraint(equalTo: contentGuide?.topAnchor ?? container.topAnchor),
-            // 4pt bottom inset so the last row doesn't clip against the sill.
-            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
-        ])
+        // Top is pinned to the WINDOW's contentLayoutGuide, which excludes the
+        // titlebar strip — so paddingTop counts from BELOW the titlebar, and
+        // hover/drag on the titlebar keep working. Fall back to container.top
+        // if the guide isn't available (shouldn't happen on macOS 13+).
+        padTopConstraint      = terminal.topAnchor.constraint(equalTo: contentGuide?.topAnchor ?? container.topAnchor)
+        padBottomConstraint   = terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        padLeadingConstraint  = terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor)
+        padTrailingConstraint = terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        NSLayoutConstraint.activate([padTopConstraint, padBottomConstraint, padLeadingConstraint, padTrailingConstraint])
+        applyPadding(store.current)   // seed initial padding
 
         // Context menu — same JSON that powers the menubar.
         let spec = MenuLoader.load()
@@ -154,6 +161,18 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         terminal.getTerminal().setCursorStyle(s.swiftTermCursor)
         window.backgroundColor = theme.background
         window.alphaValue = CGFloat(max(0.5, min(1.0, s.windowOpacity)))
+        applyPadding(s)
+    }
+
+    /// Update the four edge constraints from the current padding settings.
+    /// Positive constants push edges INWARD: leading/top take +N, trailing/
+    /// bottom take -N (the trailing/bottom anchors read "constraint from the
+    /// outer edge", so inset is negative).
+    private func applyPadding(_ s: Settings) {
+        padTopConstraint.constant      =  CGFloat(s.paddingTop)
+        padBottomConstraint.constant   = -CGFloat(s.paddingBottom)
+        padLeadingConstraint.constant  =  CGFloat(s.paddingLeading)
+        padTrailingConstraint.constant = -CGFloat(s.paddingTrailing)
     }
 
     // MARK: - Sensors
