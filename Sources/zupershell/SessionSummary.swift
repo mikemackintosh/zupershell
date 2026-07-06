@@ -35,6 +35,12 @@ final class SessionSummary: ObservableObject, Identifiable {
     @Published var lastActivity: Date
     @Published var clipboardWriteAttempts: Int = 0
     @Published var clipboardWritesDenied: Int = 0
+    /// True when the terminal has rung the bell (BEL) since the last time the
+    /// window was focused. Used to flag sessions like Claude Code that are
+    /// blocked on user input (approval prompts, etc.) — the OSC 133
+    /// running/idle bit alone can't distinguish "actively working" from
+    /// "waiting for you." Cleared on window-becomes-key.
+    @Published var pendingAttention: Bool = false
     /// Ring buffer of the most recent commands (newest first). Capped at 12.
     @Published var recent: [RecentCommand] = []
 
@@ -76,6 +82,9 @@ final class SessionSummary: ObservableObject, Identifiable {
         if denied { clipboardWritesDenied += 1 }
         lastActivity = Date()
     }
+
+    func markNeedsAttention()  { pendingAttention = true;  lastActivity = Date() }
+    func clearAttention()      { pendingAttention = false }
 }
 
 /// App-wide registry — the coordinator publishes this, the overview subscribes.

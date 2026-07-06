@@ -14,6 +14,21 @@ import SwiftTerm
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class ZushTerminalView: LocalProcessTerminalView {
+    /// Fired when the terminal rings its bell (BEL, 0x07). Claude Code (and
+    /// other TUIs) emits BEL when waiting for user input — approval prompts,
+    /// menu confirmations, etc. Set from SessionWindow so it can update the
+    /// session summary's pendingAttention flag.
+    var onBell: (() -> Void)?
+
+    /// Same story as requestOpenLink — not `override` because bell() only
+    /// exists on TerminalViewDelegate as a protocol extension default, not
+    /// as an inherited class method. Declaring it satisfies the protocol
+    /// requirement; dynamic dispatch picks this version.
+    func bell(source: TerminalView) {
+        NSSound.beep()      // keep the audible cue (the default impl did this)
+        onBell?()
+    }
+
     // Note: not `override` because SwiftTerm's LocalProcessTerminalView inherits
     // requestOpenLink only via a TerminalViewDelegate protocol extension (not a
     // class method). Declaring it here satisfies the protocol requirement, and

@@ -138,6 +138,11 @@ struct CompactSessionRow: View {
     var body: some View {
         HStack(spacing: 10) {
             statusDot
+            if s.pendingAttention {
+                Image(systemName: "hand.raised.fill")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(theme.errColor)
+            }
             Text(s.title)
                 .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(theme.fg)
@@ -202,6 +207,7 @@ struct CompactSessionRow: View {
 
     private var statusDot: some View {
         let color: Color = {
+            if s.pendingAttention { return theme.errColor }
             if s.isRunning { return theme.runColor }
             if let ec = s.lastExit { return ec == 0 ? theme.okColor : theme.errColor }
             return theme.dim
@@ -268,6 +274,16 @@ struct SessionCard: View {
                     .fill(sessionTint)
                     .frame(width: 3, height: 14)
                 Text(s.title).font(.headline).foregroundStyle(theme.fg).lineLimit(1)
+                if s.pendingAttention {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hand.raised.fill")
+                        Text("NEEDS INPUT")
+                    }
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundStyle(theme.bg)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.errColor))
+                }
                 Spacer()
                 Text(relativeTime(from: s.lastActivity, to: now))
                     .font(.caption).monospacedDigit()
@@ -339,7 +355,10 @@ struct SessionCard: View {
     }
 
     private var statusDot: some View {
+        // Attention beats everything else — a session waiting on user input is
+        // the most important signal to surface.
         let color: Color = {
+            if s.pendingAttention { return theme.errColor }
             if s.isRunning { return theme.runColor }
             if let ec = s.lastExit { return ec == 0 ? theme.okColor : theme.errColor }
             return theme.dim
@@ -347,7 +366,7 @@ struct SessionCard: View {
         return Circle()
             .fill(color)
             .frame(width: 8, height: 8)
-            .shadow(color: color.opacity(0.7), radius: 3)
+            .shadow(color: color.opacity(0.7), radius: s.pendingAttention ? 6 : 3)
     }
 
     private func exitBadge(_ ec: Int) -> some View {

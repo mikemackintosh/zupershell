@@ -71,6 +71,14 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             window.setFrameAutosaveName("io.zyp.zupershell.mainWindow")
         }
 
+        // Bell (BEL, 0x07) fires when the terminal wants attention — TUIs
+        // like Claude Code emit BEL on approval prompts. Flag the session so
+        // the Overview surfaces it.
+        terminal.onBell = { [weak self] in
+            self?.summary.markNeedsAttention()
+            self?.audit.log("bell", [:])
+        }
+
         // Install sensors on the underlying Terminal (safe to do pre-hosting).
         let term = terminal.getTerminal()
         term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
@@ -428,6 +436,12 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         var h: UInt32 = 2166136261
         for b in id.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
         return palette[Int(h % UInt32(palette.count))]
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        // User focused the window — they've presumably seen the prompt now,
+        // so clear the "needs attention" flag.
+        summary.clearAttention()
     }
 
     func windowWillClose(_ notification: Notification) {
