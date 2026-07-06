@@ -46,6 +46,10 @@ struct OverviewView: View {
     @ObservedObject var registry: SessionsRegistry
     @ObservedObject var themeObs: ThemeObservable
     @State private var now = Date()
+    /// Density: read from settings on appear, save on change. Keeping this
+    /// as its own @State avoids re-reading the whole Settings struct on
+    /// every ticker tick.
+    @State private var compact: Bool = SettingsStore.shared.current.overviewCompact
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var theme: Theme { themeObs.theme }
@@ -54,14 +58,40 @@ struct OverviewView: View {
         ZStack {
             theme.bg.ignoresSafeArea()
 
-            Group {
+            VStack(spacing: 0) {
+                header
                 if registry.summaries.isEmpty { emptyState } else { sessionList }
             }
             .padding(.top, 8)  // breathing room below the titlebar strip
         }
-        .frame(minWidth: 540, minHeight: 400)
+        .frame(minWidth: 540, minHeight: 320)
         .onReceive(ticker) { now = $0 }
-        .preferredColorScheme(.dark)  // force dark so .secondary/.tertiary read right
+        .preferredColorScheme(.dark)
+    }
+
+    /// Density picker + total count. Dragged to the trailing edge so titlebar
+    /// buttons on the leading side remain visually separate.
+    private var header: some View {
+        HStack {
+            if !registry.summaries.isEmpty {
+                Text("\(registry.summaries.count) session\(registry.summaries.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(theme.dim)
+            }
+            Spacer()
+            Picker("", selection: $compact) {
+                Text("Normal").tag(false)
+                Text("Compact").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .labelsHidden()
+            .onChange(of: compact) { new in
+                var s = SettingsStore.shared.current
+                if s.overviewCompact != new { s.overviewCompact = new; SettingsStore.shared.save(s) }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
     private var emptyState: some View {
@@ -81,13 +111,113 @@ struct OverviewView: View {
 
     private var sessionList: some View {
         ScrollView {
-            VStack(spacing: 8) {
-                ForEach(registry.summaries) { s in
-                    SessionCard(s: s, theme: theme, now: now)
+            VStack(spacing: compact ? 0 : 8) {
+                ForEach(Array(registry.summaries.enumerated()), id: \.element.id) { idx, s in
+                    if compact {
+                        CompactSessionRow(s: s, theme: theme, now: now)
+                        if idx < registry.summaries.count - 1 {
+                            Divider().background(theme.dim.opacity(0.2))
+                        }
+                    } else {
+                        SessionCard(s: s, theme: theme, now: now)
+                    }
                 }
             }
-            .padding(12)
+            .padding(compact ? 0 : 12)
         }
+    }
+}
+
+@available(macOS 13, *)
+struct CompactSessionRow: View {
+    @ObservedObject var s: SessionSummary
+    let theme: Theme
+    let now: Date
+
+    var body: some View {
+        HStack(spacing: 10) {
+            statusDot
+            Text(s.title)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(theme.fg)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            if !s.cwd.isEmpty {
+                Text(shortCWD(s.cwd))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.dim)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .layoutPriority(-1)  // shrink this first if space is tight
+            }
+
+            Spacer(minLength: 8)
+
+            // Current command (or last command with exit badge)
+            if s.isRunning, let cmd = s.currentCommand {
+                ProgressView().controlSize(.mini).tint(theme.runColor)
+                Text(cmd)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.fg)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: 200, alignment: .leading)
+            } else if let last = s.lastCommand {
+                if let ec = s.lastExit { exitBadge(ec) }
+                Text(last)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.dim)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: 200, alignment: .leading)
+            }
+
+            if s.clipboardWritesDenied > 0 {
+                Image(systemName: "shield.fill")
+                    .font(.caption2).foregroundStyle(theme.warnColor)
+            }
+
+            Text(relativeTime(from: s.lastActivity, to: now))
+                .font(.caption2).monospacedDigit()
+                .foregroundStyle(theme.dim)
+                .frame(width: 60, alignment: .trailing)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+
+    private var statusDot: some View {
+        let color: Color = {
+            if s.isRunning { return theme.runColor }
+            if let ec = s.lastExit { return ec == 0 ? theme.okColor : theme.errColor }
+            return theme.dim
+        }()
+        return Circle().fill(color).frame(width: 7, height: 7)
+    }
+
+    private func exitBadge(_ ec: Int) -> some View {
+        let color = ec == 0 ? theme.okColor : theme.errColor
+        return Text("\(ec)")
+            .font(.system(.caption2, design: .monospaced).bold())
+            .foregroundStyle(color)
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.15)))
+    }
+
+    private func shortCWD(_ p: String) -> String {
+        var s = p
+        if s.hasPrefix("file://"), let idx = s.dropFirst(7).firstIndex(of: "/") {
+            s = String(s[idx...])
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if s.hasPrefix(home) { s = "~" + s.dropFirst(home.count) }
+        return s
+    }
+
+    private func relativeTime(from d: Date, to now: Date) -> String {
+        let dt = Int(now.timeIntervalSince(d))
+        if dt < 2 { return "just now" }
+        if dt < 60 { return "\(dt)s ago" }
+        if dt < 3600 { return "\(dt / 60)m ago" }
+        return "\(dt / 3600)h ago"
     }
 }
 

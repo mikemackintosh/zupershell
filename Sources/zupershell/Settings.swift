@@ -36,6 +36,9 @@ struct Settings: Codable, Equatable {
     var paddingLeading: Double = 0
     var paddingTrailing: Double = 0
 
+    // Sessions Overview
+    var overviewCompact: Bool = false
+
     static let cursorStyles = ["blinkBlock","steadyBlock","blinkUnderline","steadyUnderline","blinkBar","steadyBar"]
 
     var swiftTermCursor: CursorStyle { CursorStyle.from(string: cursorStyle) ?? .steadyBlock }
