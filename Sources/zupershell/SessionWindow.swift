@@ -45,16 +45,22 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             window.setFrameAutosaveName("io.zyp.zupershell.mainWindow")
         }
 
-        // Install sensors on the underlying Terminal.
+        // Install sensors on the underlying Terminal (safe to do pre-hosting).
         let term = terminal.getTerminal()
         term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
         term.registerOscHandler(code: 133) { [weak self] d in self?.handleOSC133(Array(d)) }
-        term.options.scrollback = store.current.scrollbackLines
-        term.setup(isReset: false)
 
-        applyLiveSettings(store.current)
+        // NOTE: scrollback size is init-time inside SwiftTerm (options.scrollback
+        // is read only when the Buffer is constructed). Setting it now and
+        // calling setup(isReset:false) would NOT rebuild the buffer, so we don't
+        // do that — it was a silent no-op that also involved touching the
+        // terminal state before the view is hosted, which coincided with a
+        // second-window crash during CATransaction commit. Applying scrollback
+        // to future windows requires a fresh Terminal init; leave for a proper
+        // fix later. Sessions log the *requested* scrollback for auditability.
 
-        // Fan-out settings changes to this window for its lifetime.
+        // Fan-out settings changes to this window for its lifetime. Subscribe
+        // BEFORE hosting the view so the first apply doesn't race a redraw.
         settingsObserver = NotificationCenter.default.addObserver(
             forName: .zushSettingsChanged, object: nil, queue: .main
         ) { [weak self] n in
@@ -62,23 +68,12 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             self.applyLiveSettings(s)
         }
 
-        // Spawn the login shell.
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let shellName = (shell as NSString).lastPathComponent
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["POWERLEVEL9K_TERM_SHELL_INTEGRATION"] = "true"
-        env["TERM_PROGRAM"] = "zupershell"
-        let envArray = env.map { "\($0.key)=\($0.value)" }
-        audit.log("session_start", ["shell": shell, "emulator": "zupershell",
-                                    "theme": store.current.themeName,
-                                    "scrollback": store.current.scrollbackLines,
-                                    "windowIndex": isFirst ? 0 : 1])
-        terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
-
-        // Autoresizing container so the terminal fills the window and reflows
-        // on resize; 4pt vertical inset so the last row doesn't clip.
+        // Build container + host the terminal view BEFORE applying visual
+        // settings. This matters: installColors/nativeBackgroundColor kick
+        // CoreAnimation transactions; if they land while the view isn't in a
+        // window's hierarchy, we saw over-release crashes on the next runloop
+        // tick during CATransaction cleanup (autorelease pool → NSPointerArray
+        // dealloc → _Block_release → objc_release on a freed pointer).
         let container = NSView(frame: frame)
         container.autoresizingMask = [.width, .height]
         terminal.frame = container.bounds.insetBy(dx: 0, dy: 4)
@@ -91,13 +86,28 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         terminal.menu = MenuBuilder.buildPopup(spec, target: coordinator,
                                                selector: #selector(AppDelegate.dispatchMenuAction(_:)))
 
+        // NOW the terminal is hosted; apply visual settings.
+        applyLiveSettings(store.current)
+
+        // Spawn the login shell.
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellName = (shell as NSString).lastPathComponent
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["POWERLEVEL9K_TERM_SHELL_INTEGRATION"] = "true"
+        env["TERM_PROGRAM"] = "zupershell"
+        let envArray = env.map { "\($0.key)=\($0.value)" }
+        audit.log("session_start", ["shell": shell, "emulator": "zupershell",
+                                    "theme": store.current.themeName,
+                                    "scrollback_requested": store.current.scrollbackLines,
+                                    "windowIndex": isFirst ? 0 : 1])
+        terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
+
+        if isFirst, !store.current.rememberWindowFrame { window.center() }
         window.makeKeyAndOrderFront(nil)
-        if isFirst {
-            if !store.current.rememberWindowFrame { window.center() }
-        } else if let prev = previousKey {
+        if !isFirst, let prev = previousKey {
             window.cascadeTopLeft(from: NSPoint(x: prev.frame.minX, y: prev.frame.maxY))
-        } else {
-            window.center()
         }
         window.makeFirstResponder(terminal)
         NSApp.activate(ignoringOtherApps: true)

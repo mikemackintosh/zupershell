@@ -26,11 +26,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = newWindow()      // first window
         installCmdDragMonitor()
 
-        // Coordinator-scoped subscription: per-window changes are handled by
-        // each SessionWindow, but the drag monitor is app-wide, so we listen
-        // here too and refresh it whenever settings change.
         NotificationCenter.default.addObserver(forName: .zushSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             self?.installCmdDragMonitor()
+        }
+
+        // Repro/soak affordance: if $ZUSH_AUTO_OPEN_N is set to a positive
+        // integer, open that many additional windows staggered by 400ms each.
+        // Lets us reproduce multi-window crashes without depending on the
+        // human pressing ⌘N. Bail out on shutdown to be safe.
+        if let n = ProcessInfo.processInfo.environment["ZUSH_AUTO_OPEN_N"].flatMap(Int.init), n > 0 {
+            for i in 1...n {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400 * i)) { [weak self] in
+                    _ = self?.newWindow()
+                }
+            }
         }
     }
 
