@@ -219,67 +219,13 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             glowOverlay = overlay
         }
 
-        // Very tight edge glow: 1pt of solid color hugging the edge, then a
-        // gaussian-shaped fade over 5pt. Multi-stop gradient approximates the
-        // curved falloff so it reads as a proper glow instead of a linear
-        // ramp. Total width = 6pt.
+        // Rounded-rect ring + Gaussian-shadow glow, matching the window's
+        // corner radius so the halo actually follows the corners instead of
+        // forming a boxy frame. Real neon color from a curated palette.
         let alpha = CGFloat(max(0.0, min(1.0, s.windowGlowIntensity)))
-        let hue = SessionWindow.hue(for: audit.sessionID)
-        // Wider "solid" section so the color reads at full saturation before
-        // the fade begins — 1pt of solid gets blended with the window shadow
-        // on Retina and reads muted. 2pt solid + 6pt curved fade = 8pt total.
-        let stops: [(CGFloat, CGFloat)] = [
-            (0.000, 1.00),   // 0pt (edge): full solid
-            (0.250, 1.00),   // 2pt: still fully solid ← the punchy line
-            (0.375, 0.85),   // 3pt: still strong
-            (0.500, 0.55),   // 4pt: e^(-0.6)
-            (0.625, 0.25),   // 5pt: e^(-1.4)
-            (0.750, 0.08),   // 6pt: e^(-2.5)
-            (0.875, 0.02),   // 7pt: almost gone
-            (1.000, 0.00),   // 8pt: clear
-        ]
-        let cgColors: [CGColor] = stops.map {
-            NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: alpha * $0.1).cgColor
-        }
-        let locations: [NSNumber] = stops.map { NSNumber(value: Double($0.0)) }
-        let blur: CGFloat = 8
-        let b = overlay.bounds
-
-        // Top edge: solid at top, fading down.
-        let top = CAGradientLayer()
-        top.colors = cgColors; top.locations = locations
-        top.startPoint = CGPoint(x: 0.5, y: 1.0)
-        top.endPoint   = CGPoint(x: 0.5, y: 0.0)
-        top.frame = CGRect(x: 0, y: b.height - blur, width: b.width, height: blur)
-        top.autoresizingMask = [.layerWidthSizable, .layerMinYMargin]
-
-        // Bottom edge: solid at bottom, fading up.
-        let bottom = CAGradientLayer()
-        bottom.colors = cgColors; bottom.locations = locations
-        bottom.startPoint = CGPoint(x: 0.5, y: 0.0)
-        bottom.endPoint   = CGPoint(x: 0.5, y: 1.0)
-        bottom.frame = CGRect(x: 0, y: 0, width: b.width, height: blur)
-        bottom.autoresizingMask = [.layerWidthSizable, .layerMaxYMargin]
-
-        // Left edge: solid at left, fading right.
-        let left = CAGradientLayer()
-        left.colors = cgColors; left.locations = locations
-        left.startPoint = CGPoint(x: 0.0, y: 0.5)
-        left.endPoint   = CGPoint(x: 1.0, y: 0.5)
-        left.frame = CGRect(x: 0, y: 0, width: blur, height: b.height)
-        left.autoresizingMask = [.layerHeightSizable, .layerMaxXMargin]
-
-        // Right edge: solid at right, fading left.
-        let right = CAGradientLayer()
-        right.colors = cgColors; right.locations = locations
-        right.startPoint = CGPoint(x: 1.0, y: 0.5)
-        right.endPoint   = CGPoint(x: 0.0, y: 0.5)
-        right.frame = CGRect(x: b.width - blur, y: 0, width: blur, height: b.height)
-        right.autoresizingMask = [.layerHeightSizable, .layerMinXMargin]
-
-        for gl in [top, bottom, left, right] {
-            overlay.layer?.addSublayer(gl)
-        }
+        overlay.ringColor = SessionWindow.neonColor(for: audit.sessionID)
+            .withAlphaComponent(alpha)
+        overlay.rebuildRing()
     }
 
     /// Deterministic hue in [0, 1) from a session ID. Uses a small FNV-1a-ish
@@ -386,14 +332,89 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     // MARK: - NSWindowDelegate
 
     private final class GlowOverlayView: NSView {
+        var ringColor: NSColor = .clear
+        var cornerRadius: CGFloat = 10
+        var strokeWidth: CGFloat = 1.2
+        var glowRadius: CGFloat = 6
+
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
+            layer?.masksToBounds = false   // shadow can bleed
         }
         required init?(coder: NSCoder) { fatalError() }
-        // Pass ALL mouse events through — this is a decorative overlay only.
-        // Without this, clicks land here instead of the terminal.
+        // Pass ALL mouse events through — decorative overlay only.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func layout() { super.layout(); rebuildRing() }
+
+        func rebuildRing() {
+            layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+            guard bounds.width > 0, bounds.height > 0, ringColor.alphaComponent > 0 else { return }
+
+            // Rounded-rect stroke matching the macOS window corner radius.
+            // The stroke is thin (~1pt); the actual "glow" comes from
+            // shadowRadius acting as a Gaussian blur around the path.
+            let inset: CGFloat = 1
+            let rect = bounds.insetBy(dx: inset, dy: inset)
+            let ring = CAShapeLayer()
+            ring.path = roundedRectPath(rect, radius: cornerRadius)
+            ring.fillColor = nil
+            ring.strokeColor = ringColor.cgColor
+            ring.lineWidth = strokeWidth
+            ring.frame = bounds
+            // Shadow = Gaussian blur of the stroked path, bleeding both ways.
+            // This is what gives the soft neon halo effect.
+            ring.shadowColor = ringColor.cgColor
+            ring.shadowRadius = glowRadius
+            ring.shadowOpacity = 1.0
+            ring.shadowOffset = .zero
+            ring.masksToBounds = false
+            layer?.addSublayer(ring)
+        }
+
+        /// Manual rounded-rect path (macOS-13 compatible; NSBezierPath.cgPath
+        /// is macOS-14 only).
+        private func roundedRectPath(_ rect: CGRect, radius: CGFloat) -> CGPath {
+            let r = min(radius, min(rect.width, rect.height) / 2)
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: rect.minX + r, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+            p.addArc(center: CGPoint(x: rect.maxX - r, y: rect.minY + r), radius: r,
+                     startAngle: -.pi / 2, endAngle: 0, clockwise: false)
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+            p.addArc(center: CGPoint(x: rect.maxX - r, y: rect.maxY - r), radius: r,
+                     startAngle: 0, endAngle: .pi / 2, clockwise: false)
+            p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+            p.addArc(center: CGPoint(x: rect.minX + r, y: rect.maxY - r), radius: r,
+                     startAngle: .pi / 2, endAngle: .pi, clockwise: false)
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+            p.addArc(center: CGPoint(x: rect.minX + r, y: rect.minY + r), radius: r,
+                     startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
+            p.closeSubpath()
+            return p
+        }
+    }
+
+    /// Curated palette of vivid neon primaries. HSB-derived continuous hues
+    /// still read as muted on dark backgrounds (yellow becomes olive, blue
+    /// becomes muddy purple, etc.); explicit RGB triples of pure "neon"
+    /// primaries pop way harder. Deterministic pick via FNV-1a hash of the
+    /// session ID.
+    private static func neonColor(for id: String) -> NSColor {
+        let palette: [NSColor] = [
+            NSColor(srgbRed: 1.00, green: 0.20, blue: 0.65, alpha: 1),  // hot pink
+            NSColor(srgbRed: 0.20, green: 1.00, blue: 0.50, alpha: 1),  // lime
+            NSColor(srgbRed: 0.20, green: 0.80, blue: 1.00, alpha: 1),  // electric blue
+            NSColor(srgbRed: 1.00, green: 0.55, blue: 0.15, alpha: 1),  // hot orange
+            NSColor(srgbRed: 0.85, green: 0.30, blue: 1.00, alpha: 1),  // violet
+            NSColor(srgbRed: 1.00, green: 1.00, blue: 0.15, alpha: 1),  // neon yellow
+            NSColor(srgbRed: 0.15, green: 1.00, blue: 1.00, alpha: 1),  // cyan
+            NSColor(srgbRed: 1.00, green: 0.20, blue: 0.30, alpha: 1),  // hot red
+        ]
+        var h: UInt32 = 2166136261
+        for b in id.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return palette[Int(h % UInt32(palette.count))]
     }
 
     func windowWillClose(_ notification: Notification) {
