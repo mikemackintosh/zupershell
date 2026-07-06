@@ -246,11 +246,18 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         right.frame = CGRect(x: b.width - blur, y: 0, width: blur, height: b.height)
         right.autoresizingMask = [.layerHeightSizable, .layerMinXMargin]
 
-        // All four go ABOVE the terminal so their alpha compositing tints
-        // the edges of visible text. Because they're diffuse and low-alpha,
-        // legibility loss is negligible; the visual disambiguation is strong.
+        // Z-order: the terminal view's layer is opaque, so a plain addSublayer
+        // to container.layer put our glow BEHIND the terminal — invisible except
+        // in the titlebar strip where the terminal doesn't paint (that's why
+        // earlier only the top edge showed color). Insert ABOVE the terminal's
+        // backing layer so the gradient tints the edges of visible content.
+        let terminalLayer = terminal.layer
         for gl in [top, bottom, left, right] {
-            layer.addSublayer(gl)
+            if let tl = terminalLayer {
+                layer.insertSublayer(gl, above: tl)
+            } else {
+                layer.addSublayer(gl)
+            }
             glowLayers.append(gl)
         }
     }
