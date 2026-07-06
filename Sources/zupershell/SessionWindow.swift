@@ -14,6 +14,8 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     let window: NSWindow
     let terminal: LocalProcessTerminalView
     let audit: AuditLog
+    /// Live "what's happening now" view of this session — read by the overview.
+    let summary: SessionSummary
     private let store = SettingsStore.shared
     private weak var coordinator: AppDelegate?
     private var settingsObserver: NSObjectProtocol?
@@ -28,6 +30,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
         self.audit = AuditLog()
+        self.summary = SessionSummary(id: audit.sessionID)
 
         let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
         self.terminal = LocalProcessTerminalView(frame: frame)
@@ -209,6 +212,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             "preview": preview,
             "policy": allowed ? "allowed" : "denied",
         ])
+        summary.noteClipboardWrite(denied: !allowed)
         guard allowed else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -222,14 +226,24 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         let name = ["A": "prompt_start", "B": "command_start",
                     "C": "output_start", "D": "command_end"][phase] ?? "mark_\(phase)"
         var fields: [String: Any] = ["phase": phase, "name": name]
-        if phase == "D", f.count > 1 { fields["exit"] = Int(f[1]) ?? -1 }
+        var decodedCmd: String? = nil
+        var decodedExit: Int? = nil
+        if phase == "D", f.count > 1 {
+            decodedExit = Int(f[1]) ?? -1
+            fields["exit"] = decodedExit!
+        }
         if phase == "C", f.count > 1,
            let data = Data(base64Encoded: String(f[1])),
            let cmd = String(data: data, encoding: .utf8) {
+            decodedCmd = cmd
             fields["cmd"] = cmd
             fields["sha256"] = sha256hex(data)
         }
         audit.log("osc133", fields)
+
+        // Feed the live overview: C → command running, D → command done.
+        if phase == "C", let cmd = decodedCmd { summary.noteCommandStart(cmd) }
+        if phase == "D", let ec = decodedExit { summary.noteCommandEnd(exit: ec) }
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
@@ -240,9 +254,12 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         window.title = title.isEmpty ? "zupershell" : title
         audit.log("title", ["title": title])
+        summary.noteTitle(title)
     }
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-        audit.log("cwd", ["dir": directory ?? ""])
+        let d = directory ?? ""
+        audit.log("cwd", ["dir": d])
+        summary.noteCWD(d)
     }
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         audit.log("process_exit", ["code": exitCode.map { Int($0) } ?? -1])

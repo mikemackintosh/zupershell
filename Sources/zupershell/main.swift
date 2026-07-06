@@ -61,12 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isFirst = sessions.isEmpty
         let s = SessionWindow(coordinator: self, isFirst: isFirst, previousKey: NSApp.keyWindow)
         sessions.append(s)
+        AppDelegateBridge.registry.register(s.summary)
         FileHandle.standardError.write("zupershell window[\(sessions.count - 1)] audit log: \(s.audit.path)\n".data(using: .utf8)!)
         return s
     }
 
     /// Called by SessionWindow.windowWillClose.
     func removeSession(_ s: SessionWindow) {
+        AppDelegateBridge.registry.unregister(id: s.summary.id)
         sessions.removeAll { $0 === s }
     }
 
@@ -110,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "minimize":         { [weak self] in self?.keySession()?.window.miniaturize(nil) },
             "zoomWindow":       { [weak self] in self?.keySession()?.window.zoom(nil) },
             "bringAllToFront":  { NSApp.arrangeInFront(nil) },
+            "showOverview":     { OverviewWindowController.shared.showOverview(nil) },
         ]
     }
 

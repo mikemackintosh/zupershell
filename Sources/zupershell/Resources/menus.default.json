@@ -49,6 +49,8 @@
         { "title": "Minimize",              "shortcut": "cmd+m",         "action": "minimize" },
         { "title": "Zoom",                                              "action": "zoomWindow" },
         { "separator": true },
+        { "title": "Sessions Overview…",    "shortcut": "cmd+shift+s",   "action": "showOverview" },
+        { "separator": true },
         { "title": "Bring All to Front",                                "action": "bringAllToFront" }
       ]
     }
