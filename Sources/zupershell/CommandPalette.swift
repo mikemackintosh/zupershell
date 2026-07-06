@@ -17,14 +17,139 @@ import SwiftUI
 enum PaletteItem: Identifiable, Equatable {
     case runInNewWindow(String)             // command text
     case focusSession(SessionSummary)
+    case settingAction(SettingAction)
 
     var id: String {
         switch self {
         case .runInNewWindow(let cmd): return "run:\(cmd)"
         case .focusSession(let s):     return "sess:\(s.id)"
+        case .settingAction(let a):    return "set:\(a.id)"
         }
     }
     static func == (l: PaletteItem, r: PaletteItem) -> Bool { l.id == r.id }
+}
+
+/// One user-invokable settings action shown in the palette. Kept simple:
+/// a title, an optional trailing status ("ON" / current value), a search
+/// keyword blob, and an apply closure that mutates SettingsStore.
+struct SettingAction: Identifiable {
+    let id: String
+    let title: String
+    let status: String?        // e.g. "ON" / "OFF" / current value
+    let keywords: String       // extra tokens the fuzzy matcher can hit
+    let apply: () -> Void
+
+    /// Enumerated on every palette render so status text (ON/OFF, current
+    /// theme, etc.) reflects the live SettingsStore state.
+    static func all() -> [SettingAction] {
+        let store = SettingsStore.shared
+        var actions: [SettingAction] = []
+
+        func toggle(_ id: String, _ title: String,
+                    _ get: @escaping (Settings) -> Bool,
+                    _ set: @escaping (inout Settings, Bool) -> Void,
+                    _ keywords: String = "") {
+            let on = get(store.current)
+            actions.append(SettingAction(
+                id: id, title: title,
+                status: on ? "ON" : "OFF",
+                keywords: "toggle \(title.lowercased()) \(keywords)",
+                apply: {
+                    var s = store.current; set(&s, !get(s)); store.save(s)
+                }))
+        }
+
+        // Boolean toggles — cover every switch in Preferences.
+        toggle("glow",         "Toggle Window Glow",
+               { $0.windowGlowEnabled }, { $0.windowGlowEnabled = $1 },
+               "border tint accent")
+        toggle("thinStrokes",  "Toggle Thin Strokes",
+               { $0.thinStrokes }, { $0.thinStrokes = $1 },
+               "font smoothing retina")
+        toggle("brightColors", "Toggle Bright Colors for Bold",
+               { $0.useBrightColors }, { $0.useBrightColors = $1 },
+               "bold ansi")
+        toggle("dragAnywhere", "Toggle Cmd-Drag Window Anywhere",
+               { $0.dragWithCmdClick }, { $0.dragWithCmdClick = $1 },
+               "move window")
+        toggle("rememberFrame","Toggle Remember Window Position",
+               { $0.rememberWindowFrame }, { $0.rememberWindowFrame = $1 },
+               "save size")
+        toggle("compact",      "Toggle Compact Overview",
+               { $0.overviewCompact }, { $0.overviewCompact = $1 },
+               "sessions dense")
+        toggle("idleNotify",   "Toggle Long-Idle Notifications",
+               { $0.idleNotifyEnabled }, { $0.idleNotifyEnabled = $1 },
+               "alert notification")
+        toggle("clipWrite",    "Toggle Programmatic Clipboard Writes (OSC 52)",
+               { $0.clipboardWriteAllowed }, { $0.clipboardWriteAllowed = $1 },
+               "security paste")
+
+        // Themes — one entry per available theme; status = ✓ on current.
+        let current = store.current.themeName
+        for t in Themes.all {
+            let title = "Theme: \(t.name)"
+            let selected = (t.name == current)
+            actions.append(SettingAction(
+                id: "theme:\(t.name)", title: title,
+                status: selected ? "✓" : nil,
+                keywords: "theme color palette \(t.name.lowercased())",
+                apply: { var s = store.current; s.themeName = t.name; store.save(s) }))
+        }
+
+        // Cursor styles — same pattern.
+        let cursorLabels: [(String, String)] = [
+            ("steadyBlock",     "Block"),
+            ("blinkBlock",      "Block (blinking)"),
+            ("steadyUnderline", "Underline"),
+            ("blinkUnderline",  "Underline (blinking)"),
+            ("steadyBar",       "Bar"),
+            ("blinkBar",        "Bar (blinking)"),
+        ]
+        for (key, label) in cursorLabels {
+            let selected = (store.current.cursorStyle == key)
+            actions.append(SettingAction(
+                id: "cursor:\(key)", title: "Cursor: \(label)",
+                status: selected ? "✓" : nil,
+                keywords: "cursor caret \(label.lowercased())",
+                apply: { var s = store.current; s.cursorStyle = key; store.save(s) }))
+        }
+
+        // Font-size shortcuts.
+        actions.append(SettingAction(
+            id: "zoomIn", title: "Zoom In",
+            status: "\(Int(store.current.fontSize + 1)) pt",
+            keywords: "font bigger larger increase",
+            apply: {
+                var s = store.current; s.fontSize = min(24, s.fontSize + 1); store.save(s)
+            }))
+        actions.append(SettingAction(
+            id: "zoomOut", title: "Zoom Out",
+            status: "\(Int(store.current.fontSize - 1)) pt",
+            keywords: "font smaller decrease",
+            apply: {
+                var s = store.current; s.fontSize = max(9, s.fontSize - 1); store.save(s)
+            }))
+        actions.append(SettingAction(
+            id: "zoomReset", title: "Reset Font Size",
+            status: "13 pt",
+            keywords: "font default",
+            apply: { var s = store.current; s.fontSize = 13; store.save(s) }))
+
+        // Non-toggle actions that need the palette too.
+        actions.append(SettingAction(
+            id: "openPrefs", title: "Open Preferences…",
+            status: nil,
+            keywords: "settings config",
+            apply: { PreferencesWindowController.shared.showPreferences(nil) }))
+        actions.append(SettingAction(
+            id: "openOverview", title: "Open Sessions Overview…",
+            status: nil,
+            keywords: "sessions list",
+            apply: { OverviewWindowController.shared.showOverview(nil) }))
+
+        return actions
+    }
 }
 
 @available(macOS 13, *)
@@ -44,29 +169,42 @@ struct PaletteView: View {
 
     private var items: [PaletteItem] {
         var out: [PaletteItem] = []
-        let q = query.trimmingCharacters(in: .whitespaces)
-        // "Run in new window" — offer this first if the query isn't empty.
-        if !q.isEmpty { out.append(.runInNewWindow(q)) }
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
 
-        // Sessions matching the query (fuzzy match on title + cwd + cmd).
-        // Attention-pending first, then running, then rest — same priority the
-        // Overview uses so the palette matches the mental model.
+        // Sessions come first — most common palette use is "jump to that
+        // window I'm thinking of."
         let sessions = registry.summaries.sorted { a, b in
             if a.pendingAttention != b.pendingAttention { return a.pendingAttention }
             if a.isRunning != b.isRunning { return a.isRunning }
             return a.lastActivity > b.lastActivity
         }
-        let matches: [SessionSummary]
+        let sessionMatches: [SessionSummary]
         if q.isEmpty {
-            matches = sessions
+            sessionMatches = sessions
         } else {
-            matches = sessions.filter { s in
-                PaletteView.fuzzyMatch(q.lowercased(), in: [
+            sessionMatches = sessions.filter { s in
+                PaletteView.fuzzyMatch(q, in: [
                     s.title, s.cwd, s.currentCommand ?? "", s.lastCommand ?? ""
                 ].joined(separator: " ").lowercased())
             }
         }
-        out.append(contentsOf: matches.map(PaletteItem.focusSession))
+        out.append(contentsOf: sessionMatches.map(PaletteItem.focusSession))
+
+        // Settings actions — always shown but filtered to matching ones when
+        // a query is typed. When empty, don't clutter the list with 20 items
+        // (the user is probably here to jump to a session).
+        if !q.isEmpty {
+            for a in SettingAction.all() {
+                if PaletteView.fuzzyMatch(q, in: (a.title + " " + a.keywords).lowercased()) {
+                    out.append(.settingAction(a))
+                }
+            }
+        }
+
+        // "Run in new window" as a last-resort fallback when the user's
+        // query didn't match a session or setting.
+        if !q.isEmpty { out.append(.runInNewWindow(q)) }
+
         return out
     }
 
@@ -139,6 +277,12 @@ struct PaletteView: View {
                     Text("Run in new window").font(.caption).foregroundStyle(theme.dim)
                     Text(cmd).font(.system(.body, design: .monospaced)).foregroundStyle(theme.fg).lineLimit(1)
                 }
+            case .settingAction(let a):
+                Image(systemName: "slider.horizontal.3").foregroundStyle(theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setting").font(.caption).foregroundStyle(theme.dim)
+                    Text(a.title).font(.body).foregroundStyle(theme.fg).lineLimit(1)
+                }
             case .focusSession(let s):
                 Circle().fill(sessionStatus(s)).frame(width: 8, height: 8)
                 RoundedRectangle(cornerRadius: 2)
@@ -161,6 +305,18 @@ struct PaletteView: View {
                 }
             }
             Spacer()
+            // Settings actions show their status (ON/OFF, current value, ✓).
+            if case .settingAction(let a) = item, let status = a.status {
+                let isOn = (status == "ON" || status == "✓")
+                Text(status)
+                    .font(.system(.caption, design: .monospaced).bold())
+                    .foregroundStyle(isOn ? theme.okColor : theme.dim)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill((isOn ? theme.okColor : theme.dim).opacity(0.18))
+                    )
+            }
             // ⌘N hint on the first 9 session rows so the shortcut is discoverable.
             if let n = sessionNumber {
                 Text("⌘\(n)")
@@ -425,13 +581,14 @@ final class PaletteWindowController: NSWindowController {
     }
 
     private func perform(_ item: PaletteItem) {
-        // Snapshot before we close (SwiftUI @State would reset).
         close()
         switch item {
         case .focusSession(let s):
             AppDelegateBridge.focusSession(s.id)
         case .runInNewWindow(let cmd):
             AppDelegateBridge.runInNewWindow(cmd)
+        case .settingAction(let a):
+            a.apply()
         }
     }
 }
