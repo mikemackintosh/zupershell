@@ -24,7 +24,13 @@ struct MenuNode: Decodable {
     var isAppMenu: Bool?
     var separator: Bool?
     var shortcut: String?
+    /// Named action routed through AppDelegate.dispatchMenuAction closure map.
     var action: String?
+    /// Responder-chain action instead: sends `selector` to the first responder
+    /// with the given `tag` (e.g. NSTextFinder.Action raw value). Use for menu
+    /// items that AppKit or a hosted view handles natively (Find, Find Next…).
+    var selector: String?
+    var tag: Int?
     var items: [MenuNode]?
 }
 
@@ -108,6 +114,16 @@ enum MenuBuilder {
     private static func makeItem(_ n: MenuNode, target: AnyObject, selector: Selector) -> NSMenuItem {
         if n.separator == true { return .separator() }
         let (key, mods) = n.shortcut.map(Shortcut.parse) ?? ("", [])
+        // Responder-chain item: target=nil so AppKit routes to firstResponder.
+        // Used for things like Find… where SwiftTerm's terminal view implements
+        // performTextFinderAction(_:) natively.
+        if let selectorName = n.selector {
+            let it = NSMenuItem(title: n.title ?? "", action: Selector(selectorName), keyEquivalent: key)
+            it.keyEquivalentModifierMask = mods
+            it.target = nil
+            it.tag = n.tag ?? 0
+            return it
+        }
         let it = NSMenuItem(title: n.title ?? "", action: selector, keyEquivalent: key)
         it.keyEquivalentModifierMask = mods
         it.target = target

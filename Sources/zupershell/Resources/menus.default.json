@@ -29,7 +29,12 @@
         { "title": "Copy",                  "shortcut": "cmd+c",         "action": "copy" },
         { "title": "Paste",                 "shortcut": "cmd+v",         "action": "paste" },
         { "separator": true },
-        { "title": "Select All",            "shortcut": "cmd+a",         "action": "selectAll" }
+        { "title": "Select All",            "shortcut": "cmd+a",         "action": "selectAll" },
+        { "separator": true },
+        { "title": "Find…",                 "shortcut": "cmd+f",         "selector": "performTextFinderAction:", "tag": 0 },
+        { "title": "Find Next",             "shortcut": "cmd+g",         "selector": "performTextFinderAction:", "tag": 2 },
+        { "title": "Find Previous",         "shortcut": "cmd+shift+g",   "selector": "performTextFinderAction:", "tag": 3 },
+        { "title": "Use Selection for Find","shortcut": "cmd+e",         "selector": "performTextFinderAction:", "tag": 7 }
       ]
     },
     {
