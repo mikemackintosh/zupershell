@@ -439,9 +439,9 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// becomes muddy purple, etc.); explicit RGB triples of pure "neon"
     /// primaries pop way harder. Deterministic pick via FNV-1a hash of the
     /// session ID.
-    /// Append a chunk to the rolling buffer, keep the tail, strip ANSI,
-    /// and scan for approval-prompt phrases. Runs on every PTY read; the
-    /// buffer is bounded so total work per call stays roughly constant.
+    /// PTY-chunk scan kept as a first-line signal (fast path when the phrase
+    /// happens to arrive contiguously), but no longer the primary detector —
+    /// see scanRenderedBufferForAttention for the reliable path.
     private func appendAndScanForAttention(_ chunk: String) {
         attentionBuffer += chunk
         if attentionBuffer.count > Self.attentionBufferMax {
@@ -450,14 +450,54 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         let stripped = Self.stripANSI(attentionBuffer).lowercased()
         for p in Self.attentionPhrases where stripped.contains(p) {
             if !summary.pendingAttention {
-                audit.log("attention_prompt", ["match": p])
-                FileHandle.standardError.write("[attn-match] session=\(summary.id.suffix(8)) phrase=\(p)\n".data(using: .utf8)!)
+                audit.log("attention_prompt", ["match": p, "source": "chunk"])
             }
             summary.markNeedsAttention()
-            // Truncate the buffer past the match so we don't refire on the
-            // same rendered prompt every 200ms.
             attentionBuffer = ""
             return
+        }
+    }
+
+    /// Poll the CURRENT ON-SCREEN TEXT of the terminal (post-render, cell
+    /// grid content) and scan for approval-prompt phrases. This is the
+    /// reliable detector: it works no matter how the tool painted the text —
+    /// character-by-character with cursor positioning, cleared-and-repainted
+    /// on every animation tick, whatever. What lands on the visible cells is
+    /// what we scan.
+    func scanRenderedBufferForAttention() {
+        guard summary.isRunning else { return }
+        let data = terminal.getTerminal().getBufferAsData(kind: .active, encoding: .utf8)
+        guard !data.isEmpty else { return }
+        // Normalize the text: lowercase AND replace any Unicode whitespace
+        // (non-breaking spaces, thin spaces, etc. that TUIs love to sprinkle
+        // in for alignment) with plain ASCII spaces. Also strip zero-width
+        // characters that can appear between letters and break substring
+        // matches.
+        let raw = String(decoding: data, as: UTF8.self).lowercased()
+        var normalized = ""
+        normalized.reserveCapacity(raw.count)
+        for scalar in raw.unicodeScalars {
+            let v = scalar.value
+            // Zero-width / soft-hyphen: drop.
+            if v == 0x200B || v == 0x200C || v == 0x200D || v == 0x2060 || v == 0x00AD { continue }
+            // Anything Unicode categorizes as whitespace → ASCII space.
+            if scalar.properties.isWhitespace { normalized.append(" "); continue }
+            normalized.unicodeScalars.append(scalar)
+        }
+        let text = normalized
+
+        for p in Self.attentionPhrases where text.contains(p) {
+            if !summary.pendingAttention {
+                audit.log("attention_prompt", ["match": p, "source": "buffer"])
+            }
+            summary.markNeedsAttention()
+            return
+        }
+        // No matching phrase in the visible buffer. If we were pending, the
+        // user presumably answered the prompt and the tool has moved on —
+        // auto-clear so the Overview relaxes without needing focus.
+        if summary.pendingAttention {
+            summary.clearAttention()
         }
     }
 
@@ -503,6 +543,9 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         "do you want to continue",
         "are you sure",
         "press any key",
+        "requires approval",          // Claude Code prompt banner
+        "1. yes",                     // Claude's numbered menu, quite distinctive
+        "esc to cancel",              // Claude's prompt footer
         "(y/n)",
         "(y/n):",
         "(y/n)?",

@@ -180,20 +180,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   2. Long-idle notification threshold → post macOS notification once.
     func installIdleNotifier() {
         idleTimer?.invalidate()
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.checkIdleSessions()
         }
     }
 
     private func checkIdleSessions() {
         let s = store.current
-        guard s.idleNotifyEnabled else { return }
-        let notifyThreshold = TimeInterval(s.idleNotifyThresholdSeconds)
         let now = Date()
         for session in sessions {
+            // Reliable attention detector: scan the rendered terminal grid
+            // for approval-prompt phrases. Runs regardless of the idle-
+            // notification setting because it's the primary attention signal.
+            session.scanRenderedBufferForAttention()
+
+            guard s.idleNotifyEnabled else { continue }
             let sum = session.summary
             if sum.isRunning, let cmd = sum.currentCommand,
-               now.timeIntervalSince(sum.lastActivity) >= notifyThreshold,
+               now.timeIntervalSince(sum.lastActivity) >= TimeInterval(s.idleNotifyThresholdSeconds),
                !idleAlerted.contains(sum.id) {
                 idleAlerted.insert(sum.id)
                 postIdleNotification(cmd: cmd, title: sum.title,
