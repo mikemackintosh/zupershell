@@ -405,9 +405,11 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             path.stroke()
             ctx.restoreGState()
 
-            // 2. CRISP OUTLINE: 1pt fully-opaque stroke on top, no shadow.
+            // 2. CRISP OUTLINE: 0.5pt hairline on top, no shadow. Matches
+            // the CSS reference (`0 0 0 0.5px rgba(...)`) — one physical
+            // pixel on Retina instead of two.
             ringColor.setStroke()
-            path.lineWidth = 1.0
+            path.lineWidth = 0.5
             path.stroke()
         }
 
