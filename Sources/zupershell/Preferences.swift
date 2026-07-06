@@ -68,6 +68,20 @@ struct PreferencesView: View {
                     caption("Window frame changes apply on next window. Opacity and Cmd-drag apply live.")
                 }
 
+                Section("Notifications") {
+                    Toggle("Notify on long-running commands", isOn: $s.idleNotifyEnabled)
+                    Stepper(value: $s.idleNotifyThresholdSeconds, in: 10...3600, step: 10) {
+                        Text("Threshold: \(s.idleNotifyThresholdSeconds)s")
+                    }
+                    caption("Post a macOS notification when a command has been running longer than the threshold. One alert per stalled run.")
+                }
+
+                Section("Editor") {
+                    TextField("path:line open command", text: $s.fileOpenCommand)
+                        .font(.system(.body, design: .monospaced))
+                    caption("Command run when you ⌘-click `path:line` in the terminal. {path} and {line} are substituted. Examples: `code -g {path}:{line}` (VS Code), `subl {path}:{line}` (Sublime), `open {path}` (system default, no line jump).")
+                }
+
                 Section("Security") {
                     Toggle("Allow programmatic clipboard writes (OSC 52)", isOn: $s.clipboardWriteAllowed)
                     caption("When off, sequences that write to your clipboard are logged and blocked. Every attempt is audited either way.")

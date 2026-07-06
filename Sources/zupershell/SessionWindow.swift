@@ -12,7 +12,7 @@ import SwiftTerm
 
 final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowDelegate {
     let window: NSWindow
-    let terminal: LocalProcessTerminalView
+    let terminal: ZushTerminalView
     let audit: AuditLog
     /// Live "what's happening now" view of this session — read by the overview.
     let summary: SessionSummary
@@ -33,7 +33,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         self.summary = SessionSummary(id: audit.sessionID)
 
         let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
-        self.terminal = LocalProcessTerminalView(frame: frame)
+        self.terminal = ZushTerminalView(frame: frame)
         self.window = NSWindow(
             contentRect: frame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

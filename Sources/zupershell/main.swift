@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import UserNotifications
 
 // ─────────────────────────────────────────────────────────────────────────────
 // zupershell — macOS terminal emulator with a built-in audit/security tap.
@@ -21,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var actions: [String: () -> Void] = [:]
     private var cmdDragMonitor: Any?
 
+    /// Session IDs we've already notified about a long-running command in the
+    /// CURRENT run. Cleared when the command finishes (isRunning goes false).
+    private var idleAlerted = Set<String>()
+    private var idleTimer: Timer?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenus()
         // Populate the AppDelegateBridge focus closure so Overview rows can
@@ -35,6 +41,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = newWindow()      // first window
         installCmdDragMonitor()
+        installIdleNotifier()
+
+        // Request notification permission (silent no-op if user says no).
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         NotificationCenter.default.addObserver(forName: .zushSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             self?.installCmdDragMonitor()
@@ -139,6 +149,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Cmd-drag anywhere
+
+    /// Fires every 10s to scan sessions for a still-running command that has
+    /// been silent longer than the configured threshold. Posts one macOS user
+    /// notification per stalled run.
+    func installIdleNotifier() {
+        idleTimer?.invalidate()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.checkIdleSessions()
+        }
+    }
+
+    private func checkIdleSessions() {
+        let s = store.current
+        guard s.idleNotifyEnabled else { return }
+        let threshold = TimeInterval(s.idleNotifyThresholdSeconds)
+        let now = Date()
+        for session in sessions {
+            let sum = session.summary
+            // Clear alert bit when a command finishes.
+            if !sum.isRunning { idleAlerted.remove(sum.id); continue }
+            guard let cmd = sum.currentCommand,
+                  now.timeIntervalSince(sum.lastActivity) >= threshold,
+                  !idleAlerted.contains(sum.id) else { continue }
+            idleAlerted.insert(sum.id)
+            postIdleNotification(cmd: cmd, title: sum.title, elapsed: Int(now.timeIntervalSince(sum.lastActivity)))
+        }
+    }
+
+    private func postIdleNotification(cmd: String, title: String, elapsed: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Still running (\(elapsed)s)"
+        content.body = "[\(title)] \(cmd)"
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
 
     /// Install (or refresh) the local mouse monitor: on left-mouse-down with
     /// Cmd held, if the event's window belongs to any of our sessions, hand

@@ -43,6 +43,17 @@ struct Settings: Codable, Equatable {
     // Sessions Overview
     var overviewCompact: Bool = false
 
+    // Long-idle notifications: alert when a command has been "running" (between
+    // OSC 133;C and ;D) longer than idleNotifyThresholdSeconds. One alert per
+    // stalled run — resets when the command completes.
+    var idleNotifyEnabled: Bool = true
+    var idleNotifyThresholdSeconds: Int = 60
+
+    // Editor for ⌘-click on `path:line` — {path} and {line} are substituted.
+    // Default uses `open` (system default handler, no line jump); override to
+    // `code -g {path}:{line}` for VS Code or `subl {path}:{line}` for Sublime.
+    var fileOpenCommand: String = "open {path}"
+
     static let cursorStyles = ["blinkBlock","steadyBlock","blinkUnderline","steadyUnderline","blinkBar","steadyBar"]
 
     var swiftTermCursor: CursorStyle { CursorStyle.from(string: cursorStyle) ?? .steadyBlock }
