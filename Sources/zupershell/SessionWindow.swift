@@ -225,22 +225,24 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         // ramp. Total width = 6pt.
         let alpha = CGFloat(max(0.0, min(1.0, s.windowGlowIntensity)))
         let hue = SessionWindow.hue(for: audit.sessionID)
-        // Gaussian-ish falloff — front-loaded, so the color is punchy at the
-        // edge and softens fast. Locations are along [0=edge, 1=inward].
+        // Wider "solid" section so the color reads at full saturation before
+        // the fade begins — 1pt of solid gets blended with the window shadow
+        // on Retina and reads muted. 2pt solid + 6pt curved fade = 8pt total.
         let stops: [(CGFloat, CGFloat)] = [
-            (0.00, 1.00),   // 0pt (edge): solid
-            (0.17, 1.00),   // 1pt: still solid ← the "1px of solid color"
-            (0.33, 0.72),   // 2pt: e^(-0.5)
-            (0.50, 0.32),   // 3pt: e^(-1)
-            (0.67, 0.08),   // 4pt: e^(-1.5)
-            (0.83, 0.01),   // 5pt: e^(-2)
-            (1.00, 0.00),   // 6pt: clear
+            (0.000, 1.00),   // 0pt (edge): full solid
+            (0.250, 1.00),   // 2pt: still fully solid ← the punchy line
+            (0.375, 0.85),   // 3pt: still strong
+            (0.500, 0.55),   // 4pt: e^(-0.6)
+            (0.625, 0.25),   // 5pt: e^(-1.4)
+            (0.750, 0.08),   // 6pt: e^(-2.5)
+            (0.875, 0.02),   // 7pt: almost gone
+            (1.000, 0.00),   // 8pt: clear
         ]
         let cgColors: [CGColor] = stops.map {
             NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: alpha * $0.1).cgColor
         }
         let locations: [NSNumber] = stops.map { NSNumber(value: Double($0.0)) }
-        let blur: CGFloat = 6
+        let blur: CGFloat = 8
         let b = overlay.bounds
 
         // Top edge: solid at top, fading down.
