@@ -216,7 +216,7 @@ struct PaletteFocusedField: NSViewRepresentable {
     var onArrow: (Int) -> Void      // +1 for down, -1 for up
 
     func makeNSView(context: Context) -> NSTextField {
-        let tf = PaletteTextField()
+        let tf = NSTextField()
         tf.placeholderString = "Type a command or session…"
         tf.isBezeled = false
         tf.drawsBackground = false
@@ -224,48 +224,51 @@ struct PaletteFocusedField: NSViewRepresentable {
         tf.font = .systemFont(ofSize: 18, weight: .regular)
         tf.textColor = NSColor.textColor
         tf.delegate = context.coordinator
-        tf.paletteHandlers = context.coordinator
-        DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
+        // No manual makeFirstResponder here — the controller sets it after
+        // the SwiftUI hosting hierarchy is populated.
         return tf
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
+        // Keep the coordinator's `parent` fresh so closures see the latest
+        // @State/@Binding-backed callbacks (SwiftUI recreates the struct on
+        // every re-render; the coordinator persists).
+        context.coordinator.parent = self
         if nsView.stringValue != text { nsView.stringValue = text }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    final class Coordinator: NSObject, NSTextFieldDelegate, PaletteFieldHandlers {
+    final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: PaletteFocusedField
         init(_ p: PaletteFocusedField) { parent = p }
+
         func controlTextDidChange(_ obj: Notification) {
             if let tf = obj.object as? NSTextField { parent.text = tf.stringValue }
         }
-        func paletteFieldEnter()  { parent.onSubmit() }
-        func paletteFieldEscape() { parent.onCancel() }
-        func paletteFieldUp()     { parent.onArrow(-1) }
-        func paletteFieldDown()   { parent.onArrow(+1) }
-    }
-}
 
-protocol PaletteFieldHandlers: AnyObject {
-    func paletteFieldEnter()
-    func paletteFieldEscape()
-    func paletteFieldUp()
-    func paletteFieldDown()
-}
-
-final class PaletteTextField: NSTextField {
-    weak var paletteHandlers: PaletteFieldHandlers?
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 36, 76: paletteHandlers?.paletteFieldEnter();  return    // Return / KeypadEnter
-        case 53:     paletteHandlers?.paletteFieldEscape(); return    // Escape
-        case 126:    paletteHandlers?.paletteFieldUp();     return    // ArrowUp
-        case 125:    paletteHandlers?.paletteFieldDown();   return    // ArrowDown
-        default: break
+        /// The AppKit-idiomatic hook for special keys inside an NSTextField.
+        /// The field editor (shared NSTextView) intercepts keyDown before it
+        /// reaches the NSTextField subclass; instead it calls this delegate
+        /// method with the mapped command selector (insertNewline:, moveUp:,
+        /// cancelOperation:, …). Return true when we've handled it so the
+        /// default (e.g. beep on ↩ in a single-line field) is suppressed.
+        func control(_ control: NSControl, textView: NSTextView,
+                     doCommandBy commandSelector: Selector) -> Bool {
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)),
+                 #selector(NSResponder.insertLineBreak(_:)):
+                parent.onSubmit();  return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel();  return true
+            case #selector(NSResponder.moveUp(_:)):
+                parent.onArrow(-1); return true
+            case #selector(NSResponder.moveDown(_:)):
+                parent.onArrow(+1); return true
+            default:
+                return false
+            }
         }
-        super.keyDown(with: event)
     }
 }
 
