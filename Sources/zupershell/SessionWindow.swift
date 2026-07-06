@@ -219,12 +219,15 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             glowOverlay = overlay
         }
 
-        let alpha = CGFloat(max(0.0, min(0.6, s.windowGlowIntensity)))
+        // Neon-edge feel: tight blur (~15pt), high saturation, full brightness.
+        // Previous 40pt blur + 0.55 saturation looked washed out and drowned
+        // the whole edge instead of accenting it.
+        let alpha = CGFloat(max(0.0, min(1.0, s.windowGlowIntensity)))
         let hue = SessionWindow.hue(for: audit.sessionID)
-        let solid = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: alpha)
-        let clear = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: 0)
+        let solid = NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: alpha)
+        let clear = NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: 0)
         let colors = [solid.cgColor, clear.cgColor]
-        let blur: CGFloat = 40
+        let blur: CGFloat = 15
         let b = overlay.bounds
 
         // Top edge: solid at top, fading down.

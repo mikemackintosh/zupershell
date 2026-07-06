@@ -66,7 +66,7 @@ struct PreferencesView: View {
                         Text("Opacity: \(Int(s.windowOpacity * 100))%")
                     }
                     Toggle("Per-window colored glow", isOn: $s.windowGlowEnabled)
-                    Stepper(value: $s.windowGlowIntensity, in: 0...0.6, step: 0.05) {
+                    Stepper(value: $s.windowGlowIntensity, in: 0...1.0, step: 0.05) {
                         Text("Glow intensity: \(Int(s.windowGlowIntensity * 100))%")
                     }
                     .disabled(!s.windowGlowEnabled)
