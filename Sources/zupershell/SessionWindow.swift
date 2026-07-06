@@ -72,14 +72,31 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         // settings. This matters: installColors/nativeBackgroundColor kick
         // CoreAnimation transactions; if they land while the view isn't in a
         // window's hierarchy, we saw over-release crashes on the next runloop
-        // tick during CATransaction cleanup (autorelease pool → NSPointerArray
-        // dealloc → _Block_release → objc_release on a freed pointer).
+        // tick during CATransaction cleanup.
+        //
+        // Layout: with .fullSizeContentView the container fills the whole
+        // window (behind the titlebar); the terminal is inset from the top
+        // by the titlebar height via NSWindow.contentLayoutGuide so the
+        // terminal doesn't cover the traffic-light buttons or block titlebar
+        // drag. Since the window background matches the theme background,
+        // the top strip visually blends — there's no seam.
         let container = NSView(frame: frame)
         container.autoresizingMask = [.width, .height]
-        terminal.frame = container.bounds.insetBy(dx: 0, dy: 4)
-        terminal.autoresizingMask = [.width, .height]
         container.addSubview(terminal)
         window.contentView = container
+
+        terminal.translatesAutoresizingMaskIntoConstraints = false
+        let contentGuide = window.contentLayoutGuide as? NSLayoutGuide
+        NSLayoutConstraint.activate([
+            terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            // Top pinned to the WINDOW's contentLayoutGuide, which excludes
+            // the titlebar strip. Fall back to the container's top if the
+            // guide isn't available (shouldn't happen on macOS 13+).
+            terminal.topAnchor.constraint(equalTo: contentGuide?.topAnchor ?? container.topAnchor),
+            // 4pt bottom inset so the last row doesn't clip against the sill.
+            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
+        ])
 
         // Context menu — same JSON that powers the menubar.
         let spec = MenuLoader.load()
