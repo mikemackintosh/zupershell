@@ -219,20 +219,33 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
             glowOverlay = overlay
         }
 
-        // Neon-edge feel: tight blur (~15pt), high saturation, full brightness.
-        // Previous 40pt blur + 0.55 saturation looked washed out and drowned
-        // the whole edge instead of accenting it.
+        // Very tight edge glow: 1pt of solid color hugging the edge, then a
+        // gaussian-shaped fade over 5pt. Multi-stop gradient approximates the
+        // curved falloff so it reads as a proper glow instead of a linear
+        // ramp. Total width = 6pt.
         let alpha = CGFloat(max(0.0, min(1.0, s.windowGlowIntensity)))
         let hue = SessionWindow.hue(for: audit.sessionID)
-        let solid = NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: alpha)
-        let clear = NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: 0)
-        let colors = [solid.cgColor, clear.cgColor]
-        let blur: CGFloat = 15
+        // Gaussian-ish falloff — front-loaded, so the color is punchy at the
+        // edge and softens fast. Locations are along [0=edge, 1=inward].
+        let stops: [(CGFloat, CGFloat)] = [
+            (0.00, 1.00),   // 0pt (edge): solid
+            (0.17, 1.00),   // 1pt: still solid ← the "1px of solid color"
+            (0.33, 0.72),   // 2pt: e^(-0.5)
+            (0.50, 0.32),   // 3pt: e^(-1)
+            (0.67, 0.08),   // 4pt: e^(-1.5)
+            (0.83, 0.01),   // 5pt: e^(-2)
+            (1.00, 0.00),   // 6pt: clear
+        ]
+        let cgColors: [CGColor] = stops.map {
+            NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1.0, alpha: alpha * $0.1).cgColor
+        }
+        let locations: [NSNumber] = stops.map { NSNumber(value: Double($0.0)) }
+        let blur: CGFloat = 6
         let b = overlay.bounds
 
         // Top edge: solid at top, fading down.
         let top = CAGradientLayer()
-        top.colors = colors
+        top.colors = cgColors; top.locations = locations
         top.startPoint = CGPoint(x: 0.5, y: 1.0)
         top.endPoint   = CGPoint(x: 0.5, y: 0.0)
         top.frame = CGRect(x: 0, y: b.height - blur, width: b.width, height: blur)
@@ -240,7 +253,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
 
         // Bottom edge: solid at bottom, fading up.
         let bottom = CAGradientLayer()
-        bottom.colors = colors
+        bottom.colors = cgColors; bottom.locations = locations
         bottom.startPoint = CGPoint(x: 0.5, y: 0.0)
         bottom.endPoint   = CGPoint(x: 0.5, y: 1.0)
         bottom.frame = CGRect(x: 0, y: 0, width: b.width, height: blur)
@@ -248,7 +261,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
 
         // Left edge: solid at left, fading right.
         let left = CAGradientLayer()
-        left.colors = colors
+        left.colors = cgColors; left.locations = locations
         left.startPoint = CGPoint(x: 0.0, y: 0.5)
         left.endPoint   = CGPoint(x: 1.0, y: 0.5)
         left.frame = CGRect(x: 0, y: 0, width: blur, height: b.height)
@@ -256,7 +269,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
 
         // Right edge: solid at right, fading left.
         let right = CAGradientLayer()
-        right.colors = colors
+        right.colors = cgColors; right.locations = locations
         right.startPoint = CGPoint(x: 1.0, y: 0.5)
         right.endPoint   = CGPoint(x: 0.0, y: 0.5)
         right.frame = CGRect(x: b.width - blur, y: 0, width: blur, height: b.height)
