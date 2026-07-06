@@ -44,6 +44,13 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.backgroundColor = Themes.byName(store.current.themeName).background
+        // CRITICAL under ARC: NSWindow created via NSWindow(contentRect:...)
+        // defaults isReleasedWhenClosed = true, which sends the window an
+        // EXTRA `release` when it closes. Combined with our strong ref
+        // (let window: NSWindow), that over-releases the window; its
+        // _NSWindowTransformAnimation then holds a dangling reference and
+        // the next CATransaction commit crashes in autorelease pool cleanup.
+        window.isReleasedWhenClosed = false
 
         // Only the FIRST window drives frame autosave; further windows cascade
         // from the current key window so you don't get a stack of overlapped
