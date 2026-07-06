@@ -30,7 +30,7 @@ final class ThemeObservable: ObservableObject {
 /// Little semantic role → theme-palette color helper. Aura's palette does
 /// double duty as the "status" palette because it's designed to be legible
 /// on the dark terminal background.
-private extension Theme {
+extension Theme {
     var okColor:    Color { Color(nsColor: ansi[10]) } // bright green
     var errColor:   Color { Color(nsColor: ansi[9])  } // bright red
     var runColor:   Color { Color(nsColor: ansi[11]) } // bright yellow
@@ -488,4 +488,8 @@ enum AppDelegateBridge {
     /// Bring the terminal window that owns this sessionID forward and make
     /// it key. No-op if the ID doesn't match a live session.
     static var focusSession: (String) -> Void = { _ in }
+    /// Spawn a new SessionWindow and inject the given command as if the
+    /// user typed it into the shell. Used by the Command Palette's
+    /// "Run in new window" action.
+    static var runInNewWindow: (String) -> Void = { _ in }
 }

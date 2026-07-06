@@ -19,6 +19,7 @@
       "title": "File",
       "items": [
         { "title": "New Window",            "shortcut": "cmd+n",         "action": "newWindow" },
+        { "title": "Command Palette…",      "shortcut": "cmd+k",         "action": "showPalette" },
         { "separator": true },
         { "title": "Close Window",          "shortcut": "cmd+w",         "action": "closeWindow" }
       ]

@@ -39,6 +39,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             match.window.makeKeyAndOrderFront(nil)
         }
 
+        // Run a command in a NEW window (Command Palette's "Run in new
+        // window" action). Spawn a fresh SessionWindow, then wait one runloop
+        // tick for the shell to be up before injecting the command as bytes
+        // to the PTY. \n at the end so the shell executes it immediately.
+        AppDelegateBridge.runInNewWindow = { [weak self] cmd in
+            guard let self else { return }
+            let session = self.newWindow()
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak session] in
+                guard let session else { return }
+                let bytes = Array((cmd + "\n").utf8)
+                session.terminal.send(source: session.terminal, data: bytes[...])
+            }
+        }
+
         _ = newWindow()      // first window
         installCmdDragMonitor()
         installIdleNotifier()
@@ -133,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "zoomWindow":       { [weak self] in self?.keySession()?.window.zoom(nil) },
             "bringAllToFront":  { NSApp.arrangeInFront(nil) },
             "showOverview":     { OverviewWindowController.shared.showOverview(nil) },
+            "showPalette":      { PaletteWindowController.shared.showPalette(nil) },
             // Find — route through the responder chain so SwiftTerm's terminal
             // view (which implements performTextFinderAction) handles it. A
             // synthetic NSMenuItem carries the NSTextFinder.Action raw value.
