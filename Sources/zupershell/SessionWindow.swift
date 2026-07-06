@@ -36,6 +36,15 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// passes mouse events through via hitTest→nil.
     private var glowOverlay: GlowOverlayView?
 
+    /// Rolling window of the most recent PTY text (ANSI-stripped). Used to
+    /// detect approval-prompt patterns across chunk boundaries — Ink-based
+    /// TUIs like Claude Code paint their prompts by cursor-positioning and
+    /// writing colored fragments, so "Do you want to proceed?" arrives split
+    /// across many PTY reads with ANSI escapes interleaved. A single-chunk
+    /// substring match won't catch that.
+    private var attentionBuffer: String = ""
+    private static let attentionBufferMax = 4096
+
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
         self.audit = AuditLog()
@@ -86,12 +95,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         }
         terminal.onDataChunk = { [weak self] chunk in
             guard let self, self.summary.isRunning else { return }
-            if SessionWindow.chunkNeedsAttention(chunk) {
-                if !self.summary.pendingAttention {
-                    self.audit.log("attention_prompt", ["match": true])
-                }
-                self.summary.markNeedsAttention()
-            }
+            self.appendAndScanForAttention(chunk)
         }
 
         // Install sensors on the underlying Terminal (safe to do pre-hosting).
@@ -435,13 +439,63 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     /// becomes muddy purple, etc.); explicit RGB triples of pure "neon"
     /// primaries pop way harder. Deterministic pick via FNV-1a hash of the
     /// session ID.
-    /// Case-insensitive substring check for known "session is waiting on
-    /// user input" phrases. Kept deliberately narrow so we don't false-
-    /// positive on log output that just happens to mention "y/n" in prose.
-    static func chunkNeedsAttention(_ chunk: String) -> Bool {
-        let lower = chunk.lowercased()
-        for p in attentionPhrases where lower.contains(p) { return true }
-        return false
+    /// Append a chunk to the rolling buffer, keep the tail, strip ANSI,
+    /// and scan for approval-prompt phrases. Runs on every PTY read; the
+    /// buffer is bounded so total work per call stays roughly constant.
+    private func appendAndScanForAttention(_ chunk: String) {
+        attentionBuffer += chunk
+        if attentionBuffer.count > Self.attentionBufferMax {
+            attentionBuffer = String(attentionBuffer.suffix(Self.attentionBufferMax))
+        }
+        let stripped = Self.stripANSI(attentionBuffer).lowercased()
+        for p in Self.attentionPhrases where stripped.contains(p) {
+            if !summary.pendingAttention {
+                audit.log("attention_prompt", ["match": p])
+                FileHandle.standardError.write("[attn-match] session=\(summary.id.suffix(8)) phrase=\(p)\n".data(using: .utf8)!)
+            }
+            summary.markNeedsAttention()
+            // Truncate the buffer past the match so we don't refire on the
+            // same rendered prompt every 200ms.
+            attentionBuffer = ""
+            return
+        }
+    }
+
+    /// Strip common ANSI escape sequences so pattern matching can find
+    /// text that Ink-style TUIs write with color/cursor escapes interleaved
+    /// between individual characters or words.
+    static func stripANSI(_ s: String) -> String {
+        // CSI sequences: ESC [ ... final-byte (@ through ~), possibly with
+        // intermediate parameter/intermediate bytes in between.
+        // OSC sequences: ESC ] ... BEL (0x07) or ST (ESC \).
+        // Also strip lone BEL and other C0 controls except newlines/tabs.
+        var out = ""
+        out.reserveCapacity(s.count)
+        var it = s.unicodeScalars.makeIterator()
+        while let c = it.next() {
+            if c.value == 0x1B {                                 // ESC
+                guard let next = it.next() else { break }
+                if next == "[" {                                 // CSI
+                    while let n = it.next() {
+                        if (0x40...0x7E).contains(n.value) { break }
+                    }
+                } else if next == "]" {                          // OSC
+                    while let n = it.next() {
+                        if n.value == 0x07 { break }             // BEL terminator
+                        if n.value == 0x1B {                     // ST = ESC \
+                            _ = it.next()
+                            break
+                        }
+                    }
+                } else {
+                    // Two-byte escape (charset, single-char), skip both.
+                }
+                continue
+            }
+            if c.value < 0x20, c.value != 0x0A, c.value != 0x09 { continue }
+            out.unicodeScalars.append(c)
+        }
+        return out
     }
 
     private static let attentionPhrases: [String] = [

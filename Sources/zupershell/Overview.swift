@@ -197,6 +197,15 @@ struct CompactSessionRow: View {
                 .fill(Color(nsColor: SessionWindow.neonColor(for: s.id)))
                 .frame(width: hovering ? 3 : 2)
         }
+        // Full orange border when this session is waiting for input.
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(s.pendingAttention
+                        ? Color(nsColor: NSColor(srgbRed: 1.00, green: 0.55, blue: 0.10, alpha: 1))
+                        : Color.clear,
+                        lineWidth: s.pendingAttention ? 2 : 0)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+        )
         .onHover { h in
             hovering = h
             if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
@@ -264,6 +273,24 @@ struct SessionCard: View {
     /// Same neon-palette color the terminal window uses for its glow — ties
     /// each Overview row to its window at a glance.
     private var sessionTint: Color { Color(nsColor: SessionWindow.neonColor(for: s.id)) }
+
+    /// A punchy neon orange used to scream "this session wants your
+    /// attention." Deliberately not from the theme palette so it stands out
+    /// against ANY theme (Aura, Solarized, GitHub) and against per-session
+    /// neon tints.
+    private var attentionColor: Color {
+        Color(nsColor: NSColor(srgbRed: 1.00, green: 0.55, blue: 0.10, alpha: 1))
+    }
+
+    private var cardBorderColor: Color {
+        if s.pendingAttention { return attentionColor }
+        if hovering            { return theme.accent.opacity(0.55) }
+        return theme.dim.opacity(0.25)
+    }
+    private var cardBorderWidth: CGFloat {
+        if s.pendingAttention { return 2.5 }
+        return hovering ? 1.2 : 1
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -342,8 +369,7 @@ struct SessionCard: View {
                 .fill(theme.fg.opacity(hovering ? 0.09 : 0.04))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .stroke(hovering ? theme.accent.opacity(0.55) : theme.dim.opacity(0.25),
-                                lineWidth: hovering ? 1.2 : 1)
+                        .stroke(cardBorderColor, lineWidth: cardBorderWidth)
                 )
         )
         .onHover { h in
