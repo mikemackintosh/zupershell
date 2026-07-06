@@ -133,7 +133,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "zoomWindow":       { [weak self] in self?.keySession()?.window.zoom(nil) },
             "bringAllToFront":  { NSApp.arrangeInFront(nil) },
             "showOverview":     { OverviewWindowController.shared.showOverview(nil) },
+            // Find — route through the responder chain so SwiftTerm's terminal
+            // view (which implements performTextFinderAction) handles it. A
+            // synthetic NSMenuItem carries the NSTextFinder.Action raw value.
+            "findShow":         { [weak self] in self?.sendFindAction(.showFindInterface) },
+            "findNext":         { [weak self] in self?.sendFindAction(.nextMatch) },
+            "findPrevious":     { [weak self] in self?.sendFindAction(.previousMatch) },
+            "findUseSelection": { [weak self] in self?.sendFindAction(.setSearchString) },
         ]
+    }
+
+    /// Dispatch a find-menu action to the terminal via the responder chain.
+    /// We build a synthetic NSMenuItem carrying the tag so SwiftTerm's
+    /// performTextFinderAction(_:) implementation can decode it. Falls back
+    /// to focusing the key terminal first if nothing responds.
+    private func sendFindAction(_ action: NSTextFinder.Action) {
+        // Make sure a terminal is first responder — the menu item might be
+        // firing while the app menu itself briefly held focus.
+        if let s = keySession() { s.window.makeFirstResponder(s.terminal) }
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.tag = action.rawValue
+        let ok = NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: item)
+        if !ok {
+            // Diagnostic: something is off with the responder chain.
+            FileHandle.standardError.write("[find] no responder handled performTextFinderAction: (action=\(action.rawValue))\n".data(using: .utf8)!)
+        }
     }
 
     @objc func dispatchMenuAction(_ sender: NSMenuItem) {

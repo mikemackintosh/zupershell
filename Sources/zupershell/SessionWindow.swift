@@ -27,6 +27,10 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     private var padLeadingConstraint: NSLayoutConstraint!
     private var padTrailingConstraint: NSLayoutConstraint!
 
+    /// Container view holding the terminal. Held so applyLiveSettings can
+    /// paint the per-window glow (colored border on its layer).
+    private var containerView: NSView!
+
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
         self.audit = AuditLog()
@@ -99,8 +103,10 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         // the top strip visually blends — there's no seam.
         let container = NSView(frame: frame)
         container.autoresizingMask = [.width, .height]
+        container.wantsLayer = true                        // enables layer.borderColor for the glow
         container.addSubview(terminal)
         window.contentView = container
+        self.containerView = container
 
         terminal.translatesAutoresizingMaskIntoConstraints = false
         let contentGuide = window.contentLayoutGuide as? NSLayoutGuide
@@ -175,6 +181,33 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         window.backgroundColor = theme.background
         window.alphaValue = CGFloat(max(0.5, min(1.0, s.windowOpacity)))
         applyPadding(s)
+        applyGlow(s)
+    }
+
+    /// Faint colored border on the container's layer as a "which window am I"
+    /// disambiguator. Color is derived from a stable hash of the session ID
+    /// so it doesn't jump around across launches or menu actions.
+    private func applyGlow(_ s: Settings) {
+        guard let layer = containerView?.layer else { return }
+        guard s.windowGlowEnabled else {
+            layer.borderWidth = 0
+            layer.borderColor = nil
+            return
+        }
+        let alpha = CGFloat(max(0.0, min(0.6, s.windowGlowIntensity)))
+        let hue = SessionWindow.hue(for: audit.sessionID)
+        let color = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: alpha)
+        layer.borderColor = color.cgColor
+        layer.borderWidth = 1.5
+    }
+
+    /// Deterministic hue in [0, 1) from a session ID. Uses a small FNV-1a-ish
+    /// hash so consecutive sessions get visually distinct hues rather than
+    /// clumping together the way plain Swift `hashValue` sometimes does.
+    private static func hue(for id: String) -> CGFloat {
+        var h: UInt32 = 2166136261
+        for b in id.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return CGFloat(h % 1000) / 1000.0
     }
 
     /// Update the four edge constraints from the current padding settings.

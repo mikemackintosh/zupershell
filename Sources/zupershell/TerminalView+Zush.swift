@@ -14,7 +14,11 @@ import SwiftTerm
 // ─────────────────────────────────────────────────────────────────────────────
 
 final class ZushTerminalView: LocalProcessTerminalView {
-    override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+    // Note: not `override` because SwiftTerm's LocalProcessTerminalView inherits
+    // requestOpenLink only via a TerminalViewDelegate protocol extension (not a
+    // class method). Declaring it here satisfies the protocol requirement, and
+    // dynamic dispatch on the protocol conformance picks our version.
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         // Real URL — just open it (matches upstream default).
         if link.contains("://") {
             if let url = URL(string: link) { NSWorkspace.shared.open(url) }

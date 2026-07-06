@@ -65,7 +65,12 @@ struct PreferencesView: View {
                     Stepper(value: $s.windowOpacity, in: 0.5...1.0, step: 0.05) {
                         Text("Opacity: \(Int(s.windowOpacity * 100))%")
                     }
-                    caption("Window frame changes apply on next window. Opacity and Cmd-drag apply live.")
+                    Toggle("Per-window colored glow", isOn: $s.windowGlowEnabled)
+                    Stepper(value: $s.windowGlowIntensity, in: 0...0.6, step: 0.05) {
+                        Text("Glow intensity: \(Int(s.windowGlowIntensity * 100))%")
+                    }
+                    .disabled(!s.windowGlowEnabled)
+                    caption("A faint tinted border, deterministic per session so multiple windows are easy to tell apart at a glance. Opacity, Cmd-drag, glow apply live.")
                 }
 
                 Section("Notifications") {

@@ -31,10 +31,10 @@
         { "separator": true },
         { "title": "Select All",            "shortcut": "cmd+a",         "action": "selectAll" },
         { "separator": true },
-        { "title": "Find…",                 "shortcut": "cmd+f",         "selector": "performTextFinderAction:", "tag": 0 },
-        { "title": "Find Next",             "shortcut": "cmd+g",         "selector": "performTextFinderAction:", "tag": 2 },
-        { "title": "Find Previous",         "shortcut": "cmd+shift+g",   "selector": "performTextFinderAction:", "tag": 3 },
-        { "title": "Use Selection for Find","shortcut": "cmd+e",         "selector": "performTextFinderAction:", "tag": 7 }
+        { "title": "Find…",                 "shortcut": "cmd+f",         "action": "findShow" },
+        { "title": "Find Next",             "shortcut": "cmd+g",         "action": "findNext" },
+        { "title": "Find Previous",         "shortcut": "cmd+shift+g",   "action": "findPrevious" },
+        { "title": "Use Selection for Find","shortcut": "cmd+e",         "action": "findUseSelection" }
       ]
     },
     {

@@ -54,6 +54,11 @@ struct Settings: Codable, Equatable {
     // `code -g {path}:{line}` for VS Code or `subl {path}:{line}` for Sublime.
     var fileOpenCommand: String = "open {path}"
 
+    // Per-window colored glow: deterministic tint per session so multiple
+    // windows are visually distinguishable. Intensity is opacity 0.0-0.6.
+    var windowGlowEnabled: Bool = true
+    var windowGlowIntensity: Double = 0.25
+
     static let cursorStyles = ["blinkBlock","steadyBlock","blinkUnderline","steadyUnderline","blinkBar","steadyBar"]
 
     var swiftTermCursor: CursorStyle { CursorStyle.from(string: cursorStyle) ?? .steadyBlock }
