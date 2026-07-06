@@ -1,106 +1,200 @@
 import AppKit
 import SwiftUI
+import Combine
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sessions Overview — "what's happening in each of my terminals right now."
 //
-// Built for the "I'm running Claude Code in three windows and I lose track"
-// case. One row per open session, live-updated via @Published. Highlights:
-//   • Green/red exit-code badge so failing agents pop.
-//   • Spinner while a command is running (between OSC 133 C → D).
-//   • Idle time counter that ticks in real time.
-//   • Clipboard-write counter with a denied-vs-allowed split.
-//   • Expandable "recent commands" strip per session.
+// Themed to match the terminal: transparent titlebar, full-size content view,
+// theme.background as window bg, theme-palette dots/badges. Live-retints when
+// the theme changes in Preferences (subscribes to .zushSettingsChanged via
+// ThemeObservable).
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Observable wrapper around the current theme so SwiftUI can re-render when
+/// the user changes theme in Preferences.
+final class ThemeObservable: ObservableObject {
+    @Published var theme: Theme = Themes.byName(SettingsStore.shared.current.themeName)
+    private var observer: NSObjectProtocol?
+    init() {
+        observer = NotificationCenter.default.addObserver(
+            forName: .zushSettingsChanged, object: nil, queue: .main
+        ) { [weak self] n in
+            guard let s = n.object as? Settings else { return }
+            self?.theme = Themes.byName(s.themeName)
+        }
+    }
+    deinit { if let obs = observer { NotificationCenter.default.removeObserver(obs) } }
+}
+
+/// Little semantic role → theme-palette color helper. Aura's palette does
+/// double duty as the "status" palette because it's designed to be legible
+/// on the dark terminal background.
+private extension Theme {
+    var okColor:    Color { Color(nsColor: ansi[10]) } // bright green
+    var errColor:   Color { Color(nsColor: ansi[9])  } // bright red
+    var runColor:   Color { Color(nsColor: ansi[11]) } // bright yellow
+    var accent:     Color { Color(nsColor: cursor)   } // theme accent
+    var fg:         Color { Color(nsColor: foreground) }
+    var bg:         Color { Color(nsColor: background) }
+    var dim:        Color { Color(nsColor: ansi[8])  } // bright black
+    var warnColor:  Color { Color(nsColor: ansi[11]) } // yellow — for policy-blocked
+}
 
 @available(macOS 13, *)
 struct OverviewView: View {
     @ObservedObject var registry: SessionsRegistry
-    /// Ticks every second so relative-time labels update without waiting on a
-    /// summary mutation. Cheap: just re-renders the small time labels.
+    @ObservedObject var themeObs: ThemeObservable
     @State private var now = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
+    var theme: Theme { themeObs.theme }
+
     var body: some View {
-        Group {
-            if registry.summaries.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "terminal").font(.system(size: 42)).foregroundStyle(.tertiary)
-                    Text("No sessions open").font(.headline).foregroundStyle(.secondary)
-                    Text("Open a window with ⌘N to start.").font(.caption).foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(registry.summaries) { s in
-                    SessionRow(s: s, now: now)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                }
-                .listStyle(.inset)
+        ZStack {
+            theme.bg.ignoresSafeArea()
+
+            Group {
+                if registry.summaries.isEmpty { emptyState } else { sessionList }
             }
+            .padding(.top, 8)  // breathing room below the titlebar strip
         }
-        .frame(minWidth: 520, minHeight: 360)
+        .frame(minWidth: 540, minHeight: 400)
         .onReceive(ticker) { now = $0 }
+        .preferredColorScheme(.dark)  // force dark so .secondary/.tertiary read right
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "terminal.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(theme.accent.opacity(0.8))
+            Text("No sessions open")
+                .font(.headline)
+                .foregroundStyle(theme.fg)
+            Text("Open a window with ⌘N to start.")
+                .font(.caption)
+                .foregroundStyle(theme.dim)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var sessionList: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(registry.summaries) { s in
+                    SessionCard(s: s, theme: theme, now: now)
+                }
+            }
+            .padding(12)
+        }
     }
 }
 
 @available(macOS 13, *)
-struct SessionRow: View {
+struct SessionCard: View {
     @ObservedObject var s: SessionSummary
+    let theme: Theme
     let now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Circle().fill(s.isRunning ? .yellow : (s.lastExit == 0 ? .green : (s.lastExit == nil ? .gray : .red)))
-                    .frame(width: 8, height: 8)
-                Text(s.title).font(.headline).lineLimit(1)
+                statusDot
+                Text(s.title).font(.headline).foregroundStyle(theme.fg).lineLimit(1)
                 Spacer()
                 Text(relativeTime(from: s.lastActivity, to: now))
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(theme.dim)
             }
 
             if !s.cwd.isEmpty {
-                Text(shortCWD(s.cwd)).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                Text(shortCWD(s.cwd))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.dim)
+                    .lineLimit(1)
             }
 
             if s.isRunning, let cmd = s.currentCommand {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text(cmd).font(.system(.body, design: .monospaced)).lineLimit(1)
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini).tint(theme.runColor)
+                    Text(cmd)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(theme.fg)
+                        .lineLimit(1)
                 }
             } else if let last = s.lastCommand {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     if let ec = s.lastExit {
-                        Text("\(ec)")
-                            .font(.system(.caption, design: .monospaced).bold())
-                            .foregroundStyle(ec == 0 ? .green : .red)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(RoundedRectangle(cornerRadius: 3).fill((ec == 0 ? Color.green : Color.red).opacity(0.15)))
+                        exitBadge(ec)
                     }
-                    Text(last).font(.system(.body, design: .monospaced)).lineLimit(1).foregroundStyle(.secondary)
+                    Text(last)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(theme.dim)
+                        .lineLimit(1)
                 }
             }
 
-            HStack(spacing: 12) {
-                Label("\(s.commandCount)", systemImage: "arrow.triangle.2.circlepath")
+            HStack(spacing: 14) {
+                statCell(systemImage: "arrow.triangle.2.circlepath",
+                         text: "\(s.commandCount)",
+                         tint: theme.dim)
                 if s.clipboardWriteAttempts > 0 {
-                    Label(
-                        s.clipboardWritesDenied > 0
-                            ? "\(s.clipboardWritesDenied) blocked / \(s.clipboardWriteAttempts) cb"
-                            : "\(s.clipboardWriteAttempts) cb writes",
-                        systemImage: s.clipboardWritesDenied > 0 ? "shield.fill" : "doc.on.clipboard"
-                    )
-                    .foregroundStyle(s.clipboardWritesDenied > 0 ? Color.orange : Color.secondary)
+                    if s.clipboardWritesDenied > 0 {
+                        statCell(systemImage: "shield.fill",
+                                 text: "\(s.clipboardWritesDenied) blocked / \(s.clipboardWriteAttempts) cb",
+                                 tint: theme.warnColor)
+                    } else {
+                        statCell(systemImage: "doc.on.clipboard",
+                                 text: "\(s.clipboardWriteAttempts) cb writes",
+                                 tint: theme.dim)
+                    }
                 }
                 Spacer()
             }
-            .font(.caption).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+            .font(.caption)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(theme.fg.opacity(0.04))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.dim.opacity(0.25), lineWidth: 1))
+        )
+    }
+
+    private var statusDot: some View {
+        let color: Color = {
+            if s.isRunning { return theme.runColor }
+            if let ec = s.lastExit { return ec == 0 ? theme.okColor : theme.errColor }
+            return theme.dim
+        }()
+        return Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .shadow(color: color.opacity(0.7), radius: 3)
+    }
+
+    private func exitBadge(_ ec: Int) -> some View {
+        let color = ec == 0 ? theme.okColor : theme.errColor
+        return Text("\(ec)")
+            .font(.system(.caption, design: .monospaced).bold())
+            .foregroundStyle(color)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4).fill(color.opacity(0.15))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(color.opacity(0.5), lineWidth: 0.5))
+            )
+    }
+
+    private func statCell(systemImage: String, text: String, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+            Text(text)
+        }
+        .foregroundStyle(tint)
     }
 
     private func shortCWD(_ p: String) -> String {
-        // OSC 7 sends file://host/abs/path; strip the file:// prefix + host
         var s = p
         if s.hasPrefix("file://"), let idx = s.dropFirst(7).firstIndex(of: "/") {
             s = String(s[idx...])
@@ -122,22 +216,41 @@ struct SessionRow: View {
 final class OverviewWindowController: NSWindowController, NSWindowDelegate {
     static let shared = OverviewWindowController()
     private let registry = AppDelegateBridge.registry
+    private let themeObs = ThemeObservable()
+    private var settingsObserver: NSObjectProtocol?
 
     private init() {
         let w = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         w.title = "Sessions Overview"
-        w.isReleasedWhenClosed = false     // same footgun as before
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isReleasedWhenClosed = false
+        // Seed the window background from the current theme; keep it in sync as
+        // the user changes theme in Preferences.
+        let initial = Themes.byName(SettingsStore.shared.current.themeName)
+        w.backgroundColor = initial.background
+        w.appearance = NSAppearance(named: .darkAqua)
         if #available(macOS 13, *) {
-            w.contentViewController = NSHostingController(rootView: OverviewView(registry: registry))
+            w.contentViewController = NSHostingController(
+                rootView: OverviewView(registry: registry, themeObs: themeObs)
+            )
         }
         super.init(window: w)
         w.delegate = self
         w.center()
+
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .zushSettingsChanged, object: nil, queue: .main
+        ) { [weak w] n in
+            guard let w, let s = n.object as? Settings else { return }
+            w.backgroundColor = Themes.byName(s.themeName).background
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+    deinit { if let o = settingsObserver { NotificationCenter.default.removeObserver(o) } }
 
     @objc func showOverview(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
@@ -148,7 +261,6 @@ final class OverviewWindowController: NSWindowController, NSWindowDelegate {
 
 /// Static bridge so the OverviewWindowController can grab the app-wide
 /// SessionsRegistry without needing a reference to AppDelegate at import time.
-/// AppDelegate.installMenus() assigns this at launch.
 enum AppDelegateBridge {
     static var registry = SessionsRegistry()
 }
