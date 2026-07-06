@@ -28,8 +28,12 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     private var padTrailingConstraint: NSLayoutConstraint!
 
     /// Container view holding the terminal. Held so applyLiveSettings can
-    /// paint the per-window glow (colored border on its layer).
+    /// paint the per-window glow (gradient sublayers on its layer).
     private var containerView: NSView!
+
+    /// Sublayers we've added for the four-edge glow effect. Held so we can
+    /// tear them down when the setting changes or intensity is updated.
+    private var glowLayers: [CAGradientLayer] = []
 
     init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
         self.coordinator = coordinator
@@ -184,21 +188,71 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         applyGlow(s)
     }
 
-    /// Faint colored border on the container's layer as a "which window am I"
-    /// disambiguator. Color is derived from a stable hash of the session ID
-    /// so it doesn't jump around across launches or menu actions.
+    /// Four-edge soft glow: each edge gets a CAGradientLayer fading from the
+    /// tint at the very edge to fully transparent about `blur` points inward.
+    /// This reads as a diffuse halo rather than a hard border, which was Mike's
+    /// direct feedback on the earlier borderColor approach.
+    ///
+    /// Color is derived from a stable FNV-1a hash of the session ID so it's
+    /// consistent across relaunches and doesn't jump between windows.
     private func applyGlow(_ s: Settings) {
         guard let layer = containerView?.layer else { return }
-        guard s.windowGlowEnabled else {
-            layer.borderWidth = 0
-            layer.borderColor = nil
-            return
-        }
+
+        // Tear down anything previously installed.
+        layer.borderWidth = 0
+        layer.borderColor = nil
+        glowLayers.forEach { $0.removeFromSuperlayer() }
+        glowLayers = []
+
+        guard s.windowGlowEnabled else { return }
+
         let alpha = CGFloat(max(0.0, min(0.6, s.windowGlowIntensity)))
         let hue = SessionWindow.hue(for: audit.sessionID)
-        let color = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: alpha)
-        layer.borderColor = color.cgColor
-        layer.borderWidth = 1.5
+        let solid = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: alpha)
+        let clear = NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.95, alpha: 0)
+        let colors = [solid.cgColor, clear.cgColor]
+        let blur: CGFloat = 40
+        let b = layer.bounds
+
+        // Top edge: solid at top, fading down.
+        let top = CAGradientLayer()
+        top.colors = colors
+        top.startPoint = CGPoint(x: 0.5, y: 1.0)
+        top.endPoint   = CGPoint(x: 0.5, y: 0.0)
+        top.frame = CGRect(x: 0, y: b.height - blur, width: b.width, height: blur)
+        top.autoresizingMask = [.layerWidthSizable, .layerMinYMargin]
+
+        // Bottom edge: solid at bottom, fading up.
+        let bottom = CAGradientLayer()
+        bottom.colors = colors
+        bottom.startPoint = CGPoint(x: 0.5, y: 0.0)
+        bottom.endPoint   = CGPoint(x: 0.5, y: 1.0)
+        bottom.frame = CGRect(x: 0, y: 0, width: b.width, height: blur)
+        bottom.autoresizingMask = [.layerWidthSizable, .layerMaxYMargin]
+
+        // Left edge: solid at left, fading right.
+        let left = CAGradientLayer()
+        left.colors = colors
+        left.startPoint = CGPoint(x: 0.0, y: 0.5)
+        left.endPoint   = CGPoint(x: 1.0, y: 0.5)
+        left.frame = CGRect(x: 0, y: 0, width: blur, height: b.height)
+        left.autoresizingMask = [.layerHeightSizable, .layerMaxXMargin]
+
+        // Right edge: solid at right, fading left.
+        let right = CAGradientLayer()
+        right.colors = colors
+        right.startPoint = CGPoint(x: 1.0, y: 0.5)
+        right.endPoint   = CGPoint(x: 0.0, y: 0.5)
+        right.frame = CGRect(x: b.width - blur, y: 0, width: blur, height: b.height)
+        right.autoresizingMask = [.layerHeightSizable, .layerMinXMargin]
+
+        // All four go ABOVE the terminal so their alpha compositing tints
+        // the edges of visible text. Because they're diffuse and low-alpha,
+        // legibility loss is negligible; the visual disambiguation is strong.
+        for gl in [top, bottom, left, right] {
+            layer.addSublayer(gl)
+            glowLayers.append(gl)
+        }
     }
 
     /// Deterministic hue in [0, 1) from a session ID. Uses a small FNV-1a-ish
