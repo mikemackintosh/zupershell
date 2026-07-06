@@ -41,7 +41,7 @@
     {
       "title": "View",
       "items": [
-        { "title": "Clear Buffer",          "shortcut": "cmd+k",         "action": "clearBuffer" },
+        { "title": "Clear Buffer",          "shortcut": "cmd+shift+k",   "action": "clearBuffer" },
         { "title": "Reset Terminal",        "shortcut": "cmd+opt+r",     "action": "resetTerminal" },
         { "separator": true },
         { "title": "Zoom In",               "shortcut": "cmd+=",         "action": "zoomIn" },
