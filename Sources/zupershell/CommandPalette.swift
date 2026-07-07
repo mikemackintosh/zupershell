@@ -171,8 +171,7 @@ struct PaletteView: View {
         var out: [PaletteItem] = []
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
 
-        // Sessions come first — most common palette use is "jump to that
-        // window I'm thinking of."
+        // 1) Sessions matching the query (highest priority — the common case).
         let sessions = registry.summaries.sorted { a, b in
             if a.pendingAttention != b.pendingAttention { return a.pendingAttention }
             if a.isRunning != b.isRunning { return a.isRunning }
@@ -183,27 +182,25 @@ struct PaletteView: View {
             sessionMatches = sessions
         } else {
             sessionMatches = sessions.filter { s in
-                PaletteView.fuzzyMatch(q, in: [
+                PaletteView.matches(q, in: [
                     s.title, s.cwd, s.currentCommand ?? "", s.lastCommand ?? ""
                 ].joined(separator: " ").lowercased())
             }
         }
         out.append(contentsOf: sessionMatches.map(PaletteItem.focusSession))
 
-        // Settings actions — always shown but filtered to matching ones when
-        // a query is typed. When empty, don't clutter the list with 20 items
-        // (the user is probably here to jump to a session).
+        // 2) "Run in new window" is ABOVE settings — a plain typed command
+        // is more often a "just run this" than a "reach into config" intent.
+        if !q.isEmpty { out.append(.runInNewWindow(q)) }
+
+        // 3) Settings actions (only when a query is typed).
         if !q.isEmpty {
             for a in SettingAction.all() {
-                if PaletteView.fuzzyMatch(q, in: (a.title + " " + a.keywords).lowercased()) {
+                if PaletteView.matches(q, in: (a.title + " " + a.keywords).lowercased()) {
                     out.append(.settingAction(a))
                 }
             }
         }
-
-        // "Run in new window" as a last-resort fallback when the user's
-        // query didn't match a session or setting.
-        if !q.isEmpty { out.append(.runInNewWindow(q)) }
 
         return out
     }
@@ -368,15 +365,38 @@ struct PaletteView: View {
         return s
     }
 
-    /// Cheap ordered-subsequence match — the standard "letters appear in
-    /// order" behavior Spotlight/VSCode use. Not scored (yet), but keeps
-    /// results relevant enough for interactive typing.
-    private static func fuzzyMatch(_ needle: String, in haystack: String) -> Bool {
-        var it = haystack.makeIterator()
+    /// Match a query against a haystack. Two acceptance criteria (either
+    /// hits): (a) haystack contains the query as a contiguous substring, or
+    /// (b) each character of the query appears at a WORD-START in the
+    /// haystack, in order. The word-start requirement is what makes "lol"
+    /// stop matching "toggle window glow" — "l" isn't the start of any
+    /// word there. Contiguous-substring is the fast happy path for short
+    /// queries like "lol", "prefs", session titles, etc.
+    static func matches(_ needle: String, in haystack: String) -> Bool {
+        guard !needle.isEmpty else { return true }
+        if haystack.contains(needle) { return true }
+
+        // Collect word-start indices (0 + any position after a whitespace or
+        // punctuation character).
+        let chars = Array(haystack)
+        var wordStarts: [Int] = []
+        for i in chars.indices {
+            if i == 0 { wordStarts.append(i); continue }
+            let prev = chars[i - 1]
+            if prev.isWhitespace || prev.isPunctuation || prev == "-" || prev == "_" || prev == "/" {
+                wordStarts.append(i)
+            }
+        }
+        // Greedy walk: for each needle char, find the next word-start in
+        // haystack that matches.
+        var wi = 0
         for c in needle {
-            var found = false
-            while let h = it.next() { if h == c { found = true; break } }
-            if !found { return false }
+            var matched = false
+            while wi < wordStarts.count {
+                let idx = wordStarts[wi]; wi += 1
+                if chars[idx] == c { matched = true; break }
+            }
+            if !matched { return false }
         }
         return true
     }
