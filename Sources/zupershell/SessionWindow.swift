@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import UserNotifications
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SessionWindow — one window, one terminal, one audit log.
@@ -45,10 +46,16 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
     private var attentionBuffer: String = ""
     private static let attentionBufferMax = 4096
 
-    init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil) {
+    /// OSC 7-derived cwd of the spawning session, if any. Passed to
+    /// LocalProcessTerminalView.startProcess as currentDirectory so new
+    /// windows open in the same directory as the one they were launched from.
+    private let startCwd: String?
+
+    init(coordinator: AppDelegate, isFirst: Bool, previousKey: NSWindow? = nil, startCwd: String? = nil) {
         self.coordinator = coordinator
         self.audit = AuditLog()
         self.summary = SessionSummary(id: audit.sessionID)
+        self.startCwd = startCwd
 
         let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
         self.terminal = ZushTerminalView(frame: frame)
@@ -102,6 +109,7 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         let term = terminal.getTerminal()
         term.registerOscHandler(code: 52)  { [weak self] d in self?.handleOSC52(Array(d)) }
         term.registerOscHandler(code: 133) { [weak self] d in self?.handleOSC133(Array(d)) }
+        term.registerOscHandler(code: 9)   { [weak self] d in self?.handleOSC9(Array(d)) }
 
         // NOTE: scrollback size is init-time inside SwiftTerm (options.scrollback
         // is read only when the Buffer is constructed). Setting it now and
@@ -174,7 +182,20 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
                                     "theme": store.current.themeName,
                                     "scrollback_requested": store.current.scrollbackLines,
                                     "windowIndex": isFirst ? 0 : 1])
-        terminal.startProcess(executable: shell, args: [], environment: envArray, execName: "-\(shellName)")
+        // Inherit the launching window's OSC 7 cwd if we have one. FileManager
+        // .fileExists guard keeps us from spawning into a stale/deleted dir.
+        let cwd: String? = {
+            guard let c = startCwd, !c.isEmpty else { return nil }
+            var d = c
+            if d.hasPrefix("file://"),
+               let firstSlash = d.dropFirst(7).firstIndex(of: "/") {
+                d = String(d[firstSlash...])
+            }
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: d, isDirectory: &isDir) && isDir.boolValue ? d : nil
+        }()
+        terminal.startProcess(executable: shell, args: [], environment: envArray,
+                              execName: "-\(shellName)", currentDirectory: cwd)
 
         if isFirst, !store.current.rememberWindowFrame { window.center() }
         window.makeKeyAndOrderFront(nil)
@@ -334,6 +355,34 @@ final class SessionWindow: NSObject, LocalProcessTerminalViewDelegate, NSWindowD
         // Feed the live overview: C → command running, D → command done.
         if phase == "C", let cmd = decodedCmd { summary.noteCommandStart(cmd) }
         if phase == "D", let ec = decodedExit { summary.noteCommandEnd(exit: ec) }
+    }
+
+    /// OSC 9 has two established dialects:
+    ///   • iTerm2 / Terminal.app: `\e]9;<msg>\a`  → post a user notification.
+    ///   • Windows Terminal:      `\e]9;4;<state>;<percent>\a`  → task progress
+    ///     in the taskbar. State: 0=clear, 1=default, 2=error, 3=indeterminate,
+    ///     4=warning. We audit-log progress but don't render a taskbar dot yet
+    ///     (macOS Dock has no direct equivalent; badge is a possible follow-up).
+    private func handleOSC9(_ bytes: [UInt8]) {
+        let s = String(decoding: bytes, as: UTF8.self)
+        // WT progress subformat: starts with "4;"
+        if s.hasPrefix("4;") {
+            let parts = s.dropFirst(2).split(separator: ";", maxSplits: 1)
+            let state = parts.first.map(String.init) ?? "?"
+            let pct = parts.count > 1 ? String(parts[1]) : ""
+            audit.log("osc9_progress", ["state": state, "percent": pct])
+            return
+        }
+        // iTerm-style notification. Body may be empty; ignore in that case.
+        let text = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        audit.log("osc9_notify", ["text": text])
+        guard !text.isEmpty else { return }
+        let content = UNMutableNotificationContent()
+        content.title = window.title.isEmpty ? "zupershell" : window.title
+        content.body = String(text.prefix(200))
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
     // MARK: - LocalProcessTerminalViewDelegate

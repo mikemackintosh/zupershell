@@ -89,11 +89,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Session lifecycle
 
     /// Open a new terminal window. First-window path uses frame autosave;
-    /// subsequent windows cascade off the current key window.
+    /// subsequent windows cascade off the current key window. New windows
+    /// inherit the key session's OSC 7 cwd so `⌘N` opens where you are.
     @discardableResult
     func newWindow() -> SessionWindow {
         let isFirst = sessions.isEmpty
-        let s = SessionWindow(coordinator: self, isFirst: isFirst, previousKey: NSApp.keyWindow)
+        let inheritedCwd: String? = {
+            guard !isFirst,
+                  let key = NSApp.keyWindow,
+                  let src = sessions.first(where: { $0.window === key }) else { return nil }
+            let c = src.summary.cwd
+            return c.isEmpty ? nil : c
+        }()
+        let s = SessionWindow(coordinator: self, isFirst: isFirst,
+                              previousKey: NSApp.keyWindow, startCwd: inheritedCwd)
         sessions.append(s)
         AppDelegateBridge.registry.register(s.summary)
         FileHandle.standardError.write("zupershell window[\(sessions.count - 1)] audit log: \(s.audit.path)\n".data(using: .utf8)!)

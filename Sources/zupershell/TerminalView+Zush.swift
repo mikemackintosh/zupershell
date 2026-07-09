@@ -32,6 +32,14 @@ final class ZushTerminalView: LocalProcessTerminalView {
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         lastDataAt = Date()
+        // BEL detection at the byte-slice level. SwiftTerm's TerminalViewDelegate
+        // bell(source:) is a protocol extension default; overriding it from a
+        // subclass doesn't reliably fire under Swift's protocol dispatch when
+        // the call site inside SwiftTerm is typed as `TerminalViewDelegate?`.
+        // Scanning raw bytes is deterministic and lets us keep onBell wired.
+        if slice.contains(0x07), let cb = onBell {
+            DispatchQueue.main.async(execute: cb)
+        }
         if let cb = onDataChunk {
             // Decode only if we have a subscriber. Non-fatal lossy decode is
             // fine — we're pattern-matching English strings, not parsing bytes.
@@ -41,13 +49,13 @@ final class ZushTerminalView: LocalProcessTerminalView {
         super.dataReceived(slice: slice)
     }
 
-    /// Same story as requestOpenLink — not `override` because bell() only
-    /// exists on TerminalViewDelegate as a protocol extension default, not
-    /// as an inherited class method. Declaring it satisfies the protocol
-    /// requirement; dynamic dispatch picks this version.
+    /// Kept as a protocol conformance sink but no longer the primary bell
+    /// path — we now detect BEL bytes directly in dataReceived. Protocol-
+    /// extension defaults don't dispatch reliably through class inheritance,
+    /// so relying on this method silently dropped bells (audit.jsonl showed
+    /// zero bell rows across a full probe sweep).
     func bell(source: TerminalView) {
-        NSSound.beep()      // keep the audible cue (the default impl did this)
-        onBell?()
+        NSSound.beep()
     }
 
     // Note: not `override` because SwiftTerm's LocalProcessTerminalView inherits
